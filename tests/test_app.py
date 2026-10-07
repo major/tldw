@@ -1118,6 +1118,134 @@ def test_notify_does_not_enqueue_when_store_unavailable(
         store.close()
 
 
+def test_notify_duplicate_delivery_prints_once(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A repeated delivery prints each video once instead of on every delivery."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    with TestClient(app) as client:
+        client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+        client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+
+    # Assert
+    out = capsys.readouterr().out
+    assert out.count("Fixture Video One") == 1
+    assert out.count("Fixture Video Two") == 1
+    store = open_store(settings.queue_file)
+    try:
+        assert store.counts() == {"pending": 2}
+    finally:
+        store.close()
+
+
+def test_notify_duplicate_delivery_logs_body_details(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A duplicate delivery logs an INFO line with the size, hash, and preview."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+    expected_hash = hashlib.sha256(multi_entry_payload).hexdigest()
+
+    # Act
+    with TestClient(app) as client:
+        client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+        with caplog.at_level(logging.INFO):
+            client.post(
+                "/pubsub/callback", content=multi_entry_payload, headers=headers
+            )
+
+    # Assert
+    duplicates = [
+        record
+        for record in caplog.records
+        if "duplicate delivery observed" in record.getMessage()
+    ]
+    assert duplicates
+    first = duplicates[0]
+    message = first.getMessage()
+    assert first.levelno == logging.INFO
+    assert "v_Fixture1AAAAA" in message
+    assert expected_hash in message
+    assert len(expected_hash) == 64
+    assert str(len(multi_entry_payload)) in message
+
+
+def test_notify_first_delivery_logs_no_duplicate(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The first delivery is new, so no duplicate log line is emitted."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    with TestClient(app) as client:
+        with caplog.at_level(logging.INFO):
+            client.post(
+                "/pubsub/callback", content=multi_entry_payload, headers=headers
+            )
+
+    # Assert
+    assert not any(
+        "duplicate delivery observed" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_notify_without_store_prints_every_delivery(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With no queue store there is no dedup, so every line prints and no log."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    # Bypass the lifespan: TestClient without the context manager does not run
+    # it, so the manual None survives and no store is opened.
+    app.state.queue = None
+    client = TestClient(app)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    with caplog.at_level(logging.INFO):
+        client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+        client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+
+    # Assert
+    out = capsys.readouterr().out
+    assert out.count("Fixture Video One") == 2
+    assert not any(
+        "duplicate delivery observed" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_queue_endpoint_returns_counts_json(tmp_path: Path) -> None:
     """GET /queue reports counts grouped by state."""
     # Arrange

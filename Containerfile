@@ -12,6 +12,19 @@ COPY --chown=0:0 channels.json ./
 RUN python3 -m pip install --no-cache-dir uv==0.12.18 \
     && uv sync --locked --no-dev --no-editable --python python3.14
 
+# yt-dlp needs a JavaScript runtime (Deno) to solve YouTube's player JS and
+# extract formats. Without it the YouTube extractor logs:
+#   "No supported JavaScript runtime could be found"
+# We install the official static binary here in the builder stage and copy it
+# into the runtime stage below. The builder image does not ship unzip, so the
+# zip is extracted with `python3 -m zipfile` instead.
+RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
+        -o /tmp/deno.zip \
+    && python3 -m zipfile -e /tmp/deno.zip /usr/local/bin \
+    && chmod +x /usr/local/bin/deno \
+    && rm /tmp/deno.zip \
+    && /usr/local/bin/deno --version
+
 FROM registry.access.redhat.com/hi/python:3.14@sha256:9ad2603a9f39caba3ac4101788fcceb2d63569fd1f448821bacba7c922b8b144
 
 ARG GIT_SHA=unknown
@@ -35,6 +48,10 @@ WORKDIR /opt/app-root/src
 
 COPY --from=builder --chown=65532:0 /opt/app-root/src/.venv /opt/app-root/src/.venv
 COPY --from=builder --chown=65532:0 /opt/app-root/src/channels.json /opt/app-root/src/channels.json
+
+# Deno JavaScript runtime for yt-dlp (see the builder stage comment). Placed in
+# /usr/local/bin so it is on PATH for the non-root runtime user.
+COPY --from=builder --chown=65532:0 /usr/local/bin/deno /usr/local/bin/deno
 
 ENV PATH="/opt/app-root/src/.venv/bin:${PATH}"
 

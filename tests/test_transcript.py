@@ -382,7 +382,7 @@ def test_build_ydl_opts_accepts_custom_langs(tmp_path: Path) -> None:
 _VIDEO_ID = "dQw4w9WgXcQ"
 _WATCH_URL = f"https://www.youtube.com/watch?v={_VIDEO_ID}"
 _SHORT_URL = f"https://youtu.be/{_VIDEO_ID}"
-_REQUESTED = {"requested_subtitles": {"en": {"url": "https://example/sub"}}}
+_REQUESTED: dict[str, object] = {"requested_subtitles": {"en": {"url": "https://example/sub"}}}
 
 
 def test_probe_and_fetch_ready_when_file_and_requested_subs(tmp_path: Path) -> None:

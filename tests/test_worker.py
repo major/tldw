@@ -14,6 +14,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
@@ -22,7 +23,7 @@ from fastapi import FastAPI
 from tldw import worker
 from tldw.config import Settings
 from tldw.feed import VideoEntry
-from tldw.queue import QueueStore, TerminalState, open_store
+from tldw.queue import QueueRecord, QueueStore, TerminalState, open_store
 from tldw.transcript import ProbeResult, ProbeState
 from tldw.worker import (
     DEFAULT_EMPTY_QUEUE_SLEEP,
@@ -47,9 +48,9 @@ def _entry(video_id: str = "dQw4w9WgXcQ", **overrides: object) -> VideoEntry:
     return VideoEntry(**defaults)  # type: ignore[arg-type]
 
 
-def _make_settings(**overrides: object) -> Settings:
+def _make_settings(**overrides: Any) -> Settings:
     """Build Settings with the transcript pipeline configured."""
-    defaults: dict[str, object] = {
+    defaults: dict[str, Any] = {
         "callback_url": "https://cb.example/pubsub/callback",
         "channel_ids_file": Path("/nonexistent.json"),
         "discord_webhook_url": "https://discord.com/api/webhooks/x/y",
@@ -57,7 +58,7 @@ def _make_settings(**overrides: object) -> Settings:
         "queue_file": Path("/tmp/test-queue.sqlite3"),
     }
     defaults.update(overrides)
-    return Settings(**defaults)  # type: ignore[arg-type]
+    return Settings(**defaults)
 
 
 def _make_app(settings: Settings, store: QueueStore) -> FastAPI:
@@ -164,7 +165,7 @@ def _enqueue_with_path(
     return path
 
 
-def _fetch(store: QueueStore, now: float) -> object:
+def _fetch(store: QueueStore, now: float) -> QueueRecord:
     """Fetch the single pending record, asserting it exists."""
     record = store.next_due(now=now)
     assert record is not None
@@ -190,7 +191,11 @@ async def test_loop_returns_early_without_webhook_url(
     # _never_sleep raises if the loop reaches a sleep, so a clean return is the
     # assertion that the guard fired first.
     await transcript_loop(
-        app, None, sleep=_never_sleep, probe=make_probe_raises(), send=CountingSend()
+        app,
+        httpx2.AsyncClient(),
+        sleep=_never_sleep,
+        probe=make_probe_raises(),
+        send=CountingSend(),
     )
 
     # Assert
@@ -218,7 +223,7 @@ async def test_ready_record_sends_and_marks_done(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe_raises(),
         send=sender,
@@ -253,7 +258,7 @@ async def test_ready_message_contains_title_and_quoted_lines(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe(ProbeState.READY, str(vtt)),
         send=sender,
@@ -281,7 +286,7 @@ async def test_not_ready_record_rearms_with_backoff(store: QueueStore) -> None:
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe(ProbeState.NOT_READY, None),
         send=CountingSend(),
@@ -309,7 +314,7 @@ async def test_unavailable_marks_give_up_immediately(store: QueueStore) -> None:
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe(ProbeState.UNAVAILABLE, None),
         send=CountingSend(),
@@ -336,7 +341,7 @@ async def test_rate_limited_uses_short_base_and_remains_pending(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe(ProbeState.RATE_LIMITED, None),
         send=CountingSend(),
@@ -369,7 +374,7 @@ async def test_rate_limited_exhausts_budget_and_marks_give_up(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe(ProbeState.RATE_LIMITED, None),
         send=CountingSend(),
@@ -397,7 +402,7 @@ async def test_record_past_giveup_marks_give_up_never_without_probing(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe_raises(),
         send=CountingSend(),
@@ -426,7 +431,7 @@ async def test_transcript_path_present_skips_probe_and_sends_only(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe_raises(),
         send=sender,
@@ -458,7 +463,7 @@ async def test_send_failure_rearms_without_terminal_state(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe_raises(),
         send=sender,
@@ -487,7 +492,7 @@ async def test_probe_exception_logged_and_record_rearmed(store: QueueStore) -> N
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe_raises(RuntimeError("boom")),
         send=CountingSend(),
@@ -517,7 +522,7 @@ async def test_mark_attempt_runs_before_probe_so_crash_safety_holds(
         record,
         settings,
         store,
-        None,
+        httpx2.AsyncClient(),
         opts={},
         probe=make_probe_raises(RuntimeError("boom")),
         send=CountingSend(),
@@ -553,7 +558,7 @@ async def test_loop_calls_pacing_sleep_between_records(
     with pytest.raises(asyncio.CancelledError):
         await transcript_loop(
             app,
-            None,
+            httpx2.AsyncClient(),
             sleep=sleep,
             probe=make_probe(ProbeState.UNAVAILABLE, None),
             send=CountingSend(),
@@ -577,7 +582,7 @@ async def test_loop_sleeps_long_when_queue_empty(
     with pytest.raises(asyncio.CancelledError):
         await transcript_loop(
             app,
-            None,
+            httpx2.AsyncClient(),
             sleep=sleep,
             probe=make_probe_raises(),
             send=CountingSend(),
@@ -621,7 +626,13 @@ async def test_due_backlog_probed_serially_with_pacing(
 
     # Act
     with pytest.raises(asyncio.CancelledError):
-        await transcript_loop(app, None, sleep=sleep, probe=probe, send=CountingSend())
+        await transcript_loop(
+            app,
+            httpx2.AsyncClient(),
+            sleep=sleep,
+            probe=probe,
+            send=CountingSend(),
+        )
 
     # Assert
     assert state["max_in_flight"] == 1

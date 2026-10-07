@@ -47,7 +47,11 @@ __all__ = [
     "probe_and_fetch",
     "classify_error",
     "parse_vtt",
+    "parse_vtt_timed",
+    "parse_srt_timed",
+    "render_transcript_for_llm",
     "first_lines",
+    "Cue",
 ]
 
 logger = logging.getLogger(__name__)
@@ -316,3 +320,160 @@ def first_lines(text: str, n: int) -> list[str]:
         if stripped:
             lines.append(stripped)
     return lines[:n]
+
+
+@dataclass(frozen=True)
+class Cue:
+    """One timed subtitle cue: start time in seconds + clean text."""
+
+    start: float
+    text: str
+
+
+# A cue timing line: "<start> --> <end>" with optional trailing cue settings
+# such as "align:start position:0%". Both VTT and SRT share this shape, so one
+# pattern serves both parsers. Only the start time is needed, but the end token
+# is captured to keep the pattern explicit and readable.
+_RE_CUE_TIMING = re.compile(r"^\s*(\S+)\s*-->\s*(\S+)(?:\s+.*)?$")
+
+# A VTT or SRT timestamp with optional hours. VTT uses a period as the decimal
+# separator and SRT uses a comma, so both are accepted here.
+_RE_SUBTITLE_TS = re.compile(r"^(?:(\d+):)?(\d+):(\d+(?:[.,]\d+)?)$")
+
+
+def _vtt_ts_to_seconds(ts: str) -> float:
+    """Convert a VTT or SRT timestamp to total seconds.
+
+    Accepts ``HH:MM:SS.mmm`` and ``HH:MM:SS,mmm`` with the hours part optional.
+    The SRT comma form is accepted too so the SRT parser can reuse this helper.
+    Raises ValueError on a malformed token so the caller can skip the cue.
+    """
+    match = _RE_SUBTITLE_TS.match(ts.strip())
+    if match is None:
+        raise ValueError(f"malformed subtitle timestamp: {ts!r}")
+    hours = int(match.group(1)) if match.group(1) is not None else 0
+    minutes = int(match.group(2))
+    seconds = float(match.group(3).replace(",", "."))
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _parse_timed_cues(text: str) -> list[Cue]:
+    """Walk VTT or SRT blocks into cues, preserving each cue's start time.
+
+    Header, NOTE, STYLE, and REGION blocks are skipped. A cue is found by
+    scanning a block for its timing line, which also skips an SRT numeric index
+    line and a VTT cue identifier. Inline ``<...>`` markup is stripped and a
+    line that repeats the previous line within the same cue is collapsed, which
+    matches the rolling-caption stutter the plain text parser already handles.
+    Malformed timestamps and blocks without a timing line are skipped silently.
+    """
+    cues: list[Cue] = []
+    skip_prefixes = (*_HEADER_PREFIXES, "STYLE", "REGION")
+    for block in re.split(r"\n\s*\n", text):
+        raw_lines = [line.rstrip("\r") for line in block.split("\n")]
+        content_lines = [line for line in raw_lines if line.strip()]
+        if not content_lines:
+            continue
+        if content_lines[0].strip().startswith(skip_prefixes):
+            continue
+
+        timing_index: int | None = None
+        for index, line in enumerate(content_lines):
+            if "-->" in line:
+                timing_index = index
+                break
+        if timing_index is None:
+            continue
+
+        timing = _RE_CUE_TIMING.match(content_lines[timing_index])
+        if timing is None:
+            continue
+        try:
+            start = _vtt_ts_to_seconds(timing.group(1))
+        except ValueError:
+            continue
+
+        parts: list[str] = []
+        for raw in content_lines[timing_index + 1 :]:
+            cleaned = _RE_TAG.sub("", raw).strip()
+            if not cleaned:
+                continue
+            if parts and parts[-1] == cleaned:
+                continue
+            parts.append(cleaned)
+        if not parts:
+            continue
+        cues.append(Cue(start=start, text=" ".join(parts)))
+    return cues
+
+
+def parse_vtt_timed(text: str) -> list[Cue]:
+    """Parse WebVTT text into timed cues, preserving cue start times.
+
+    - Strips WEBVTT header, Kind:, Language:, NOTE blocks.
+    - Strips inline timing tags (<00:00:01.000>), color tags (<c.color>, </c>),
+      and other <...> markup.
+    - Collapses repeated lines within a single cue.
+    - Returns cues in source order; skips malformed blocks silently.
+    """
+    return _parse_timed_cues(text)
+
+
+def parse_srt_timed(text: str) -> list[Cue]:
+    """Parse SubRip text into timed cues, preserving cue start times.
+
+    SRT format: number line, then "HH:MM:SS,mmm --> HH:MM:SS,mmm", then text,
+    then blank line. SRT uses comma as decimal separator in timestamps (vs
+    VTT's period); the shared timestamp helper accepts both. The numeric index
+    line at the start of each block is skipped.
+    """
+    return _parse_timed_cues(text)
+
+
+def _format_anchor(seconds: float) -> str:
+    """Format seconds as a bracketed anchor, e.g. ``[1:05]`` or ``[1:01:01]``.
+
+    This is the bracketed counterpart of ``format_timestamp`` in youtube.py,
+    which returns ``0:00`` without brackets. Kept separate in this slice so the
+    two modules do not depend on each other.
+    """
+    total_seconds = int(seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"[{hours}:{minutes:02d}:{secs:02d}]"
+    return f"[{minutes}:{secs:02d}]"
+
+
+def render_transcript_for_llm(
+    cues: list[Cue],
+    *,
+    block_seconds: int = 25,
+) -> str:
+    """Render a timed transcript for LLM consumption.
+
+    Merges adjacent cues into ~block_seconds-wide chunks, each prefixed with a
+    [m:ss] anchor the model can quote in its output. This gives the LLM the
+    timestamp text it needs to produce accurate, linkable timestamps.
+
+    Example output:
+        [0:00] Hello and welcome to the show. Today we're talking about Postgres.
+        [0:25] Let's dive into the first topic...
+        [12:34] This is the key insight about indexing.
+    """
+    if not cues:
+        return ""
+
+    lines: list[str] = []
+    block_start = cues[0].start
+    block_texts: list[str] = []
+    for cue in cues:
+        # Close the block once this cue would push its span past the window.
+        if block_texts and cue.start - block_start > block_seconds:
+            lines.append(f"{_format_anchor(block_start)} {' '.join(block_texts)}")
+            block_start = cue.start
+            block_texts = []
+        block_texts.append(cue.text)
+    # cues is non-empty here, so the loop above always leaves a final block.
+    lines.append(f"{_format_anchor(block_start)} {' '.join(block_texts)}")
+    return "\n".join(lines)

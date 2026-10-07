@@ -43,7 +43,14 @@ from tldw.config import Settings
 from tldw.discord import format_message
 from tldw.discord import send as discord_send
 from tldw.queue import QueueRecord, QueueStore, TerminalState
-from tldw.transcript import ProbeResult, ProbeState, build_ydl_opts, first_lines
+from tldw.transcript import (
+    ProbeResult,
+    ProbeState,
+    build_ydl_opts,
+    first_lines,
+    parse_srt_timed,
+    parse_vtt_timed,
+)
 from tldw.transcript import probe_and_fetch as transcript_probe
 
 __all__ = ["transcript_loop"]
@@ -127,6 +134,28 @@ async def transcript_loop(
             # kill the loop; log it and move on to the next record.
             logger.exception("processing raised for %s", record.video_id)
         await sleep(DEFAULT_RECORD_PACING)
+
+
+def _digest_lines(path: Path, n: int) -> list[str]:
+    """Return up to ``n`` blockquote-ready transcript lines from a subtitle file.
+
+    Parses timed cues first so VTT headers and timing lines never reach the
+    digest. Unknown extensions, and any parse error, fall back to ``first_lines``.
+    """
+    raw_text = path.read_text(encoding="utf-8")
+    try:
+        if path.suffix == ".vtt":
+            cues = parse_vtt_timed(raw_text)
+        elif path.suffix == ".srt":
+            cues = parse_srt_timed(raw_text)
+        else:
+            return first_lines(raw_text, n)
+    except Exception:
+        # A malformed subtitle file must not crash the worker; degrade to the
+        # old raw-line behavior so the digest is still sent.
+        logger.warning("timed parse failed for %s, falling back to raw lines", path)
+        return first_lines(raw_text, n)
+    return [cue.text for cue in cues[:n]]
 
 
 async def _process_record(
@@ -254,10 +283,11 @@ async def _process_record(
         logger.warning("record %s has no transcript path to send", record.video_id)
         return
 
-    # Read the .vtt, parse, slice, format, send.
+    # Read the subtitle file, parse the cues first, slice, format, send. Parsing
+    # before slicing keeps VTT headers and cue timing lines out of the digest.
     try:
-        text = Path(record_path).read_text(encoding="utf-8")
-        lines = first_lines(text, settings.transcript_lines)
+        path = Path(record_path)
+        lines = _digest_lines(path, settings.transcript_lines)
         message = format_message(record.title, record.channel_name, record.url, lines)
         await send(client, settings.discord_webhook_url, message)
     except Exception:

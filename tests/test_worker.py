@@ -158,6 +158,22 @@ def _write_vtt(tmp_path: Path, video_id: str) -> Path:
     return path
 
 
+def _write_srt(tmp_path: Path, video_id: str) -> Path:
+    """Write a small SRT file for the video and return its path."""
+    path = tmp_path / f"{video_id}.en.srt"
+    path.write_text(
+        "1\n"
+        "00:00:01,000 --> 00:00:04,000\n"
+        "Hello transcript\n"
+        "\n"
+        "2\n"
+        "00:00:05,000 --> 00:00:08,000\n"
+        "Second line\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def _enqueue_with_path(
     store: QueueStore, tmp_path: Path, video_id: str, now: float
 ) -> Path:
@@ -287,7 +303,54 @@ async def test_ready_message_contains_title_and_quoted_lines(
     assert sender.calls == 1
     assert "Test dQw4w9WgXcQ" in sender.contents[0]
     assert "> Hello transcript" in sender.contents[0]
+    # The timed parser drops the WEBVTT header before the digest is formatted.
+    assert "WEBVTT" not in sender.contents[0]
     assert store.counts() == {"pending": 0, "DONE": 1}
+
+
+@pytest.mark.parametrize(
+    ("write_subtitle", "forbidden"),
+    [
+        (_write_vtt, "WEBVTT"),
+        (_write_srt, "00:00:01,000 --> 00:00:04,000"),
+    ],
+)
+async def test_digest_parses_timed_subtitles_without_cruft(
+    store: QueueStore,
+    tmp_path: Path,
+    write_subtitle: Callable[[Path, str], Path],
+    forbidden: str,
+) -> None:
+    """The digest carries cue text only, never VTT headers or SRT timing lines.
+
+    Parametrized over VTT and SRT so both timed parser branches are pinned to
+    the clean digest shape.
+    """
+    # Arrange
+    settings = _make_settings(tmp_path)
+    now = 1000.0
+    path = write_subtitle(tmp_path, "dQw4w9WgXcQ")
+    store.enqueue(_entry(), now=now)
+    record = _fetch(store, now)
+    sender = CountingSend()
+
+    # Act
+    await _process_record(
+        record,
+        settings,
+        store,
+        httpx2.AsyncClient(),
+        opts={},
+        probe=make_probe(ProbeState.READY, str(path)),
+        send=sender,
+        sleep=_noop_sleep,
+        now=now,
+    )
+
+    # Assert
+    assert sender.calls == 1
+    assert "> Hello transcript" in sender.contents[0]
+    assert forbidden not in sender.contents[0]
 
 
 async def test_not_ready_record_rearms_with_backoff(

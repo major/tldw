@@ -1,4 +1,4 @@
-.PHONY: help install typecheck ty pyright test coverage check version container-build container-up container-down
+.PHONY: help install typecheck ty test coverage check version container-build container-up container-down
 
 .DEFAULT_GOAL := check
 
@@ -18,10 +18,7 @@ install: ## Install the project and dev dependencies
 ty: ## Type check with ty
 	uv run ty check
 
-pyright: ## Type check with pyright
-	uv run pyright
-
-typecheck: ty pyright ## Run all type checkers
+typecheck: ty ## Run all type checkers
 
 test: ## Run tests with branch coverage
 	uv run pytest

@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/hi/python:3.14-builder@sha256:cfa22ceea820d4ab653898e1f13baa7a31539312859589868abda096cc76b7ec AS builder
+FROM registry.access.redhat.com/hi/python:3.14-builder@sha256:a260cb9e1e713ff590b7340984ec1e8ea2cff0db4b453677e36c05a82f9fbe71 AS builder
 
 ENV PATH="/tmp/.local/bin:${PATH}"
 

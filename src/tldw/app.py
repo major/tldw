@@ -288,14 +288,33 @@ def create_app(
 
         store = getattr(app.state, "queue", None)
         for entry in entries:
-            print(format_video_line(entry), flush=True)
             if store is not None:
                 try:
-                    store.enqueue(entry)
+                    inserted = store.enqueue(entry)
                 except Exception:
                     # Best effort: the hub already got its 200, so a queue
                     # failure must not turn into a 500 and an endless retry.
+                    # Treat the entry as shown so operators still see the video.
                     logger.exception("queue enqueue failed for %s", entry.video_id)
+                    inserted = True
+            else:
+                # Without a store there is no way to detect duplicates, so
+                # every delivery is treated as new and printed.
+                inserted = True
+            if inserted:
+                print(format_video_line(entry), flush=True)
+            else:
+                # The hub re-delivered a video already in the queue. Log the
+                # body details at INFO so an operator can grep and diff later
+                # deliveries without treating this as an error.
+                logger.info(
+                    "duplicate delivery observed: video_id=%s body_size=%d "
+                    "body_sha256=%s body_preview=%r",
+                    entry.video_id,
+                    len(body),
+                    hashlib.sha256(body).hexdigest(),
+                    body[:200].decode("utf-8", errors="replace").replace("\n", " "),
+                )
 
         return PlainTextResponse(status_code=200)
 

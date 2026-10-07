@@ -14,7 +14,6 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-import yt_dlp
 from yt_dlp.utils import DownloadError
 
 from tldw.transcript import (
@@ -385,8 +384,11 @@ _SHORT_URL = f"https://youtu.be/{_VIDEO_ID}"
 _REQUESTED: dict[str, object] = {"requested_subtitles": {"en": {"url": "https://example/sub"}}}
 
 
-def test_probe_and_fetch_ready_when_file_and_requested_subs(tmp_path: Path) -> None:
-    """A fetched file plus requested_subtitles is READY."""
+@pytest.mark.parametrize("url", [_WATCH_URL, _SHORT_URL])
+def test_probe_and_fetch_ready_when_file_and_requested_subs(
+    tmp_path: Path, url: str
+) -> None:
+    """A fetched file plus requested_subtitles is READY for both URL forms."""
     # Arrange
     dest = tmp_path / "subs"
     opts = build_ydl_opts(dest)
@@ -396,7 +398,7 @@ def test_probe_and_fetch_ready_when_file_and_requested_subs(tmp_path: Path) -> N
     )
 
     # Act
-    result = probe_and_fetch(_WATCH_URL, opts=opts, ydl_class=ydl, dest_dir=dest)
+    result = probe_and_fetch(url, opts=opts, ydl_class=ydl, dest_dir=dest)
 
     # Assert
     assert result.state == ProbeState.READY
@@ -480,44 +482,6 @@ def test_probe_and_fetch_creates_dest_dir_if_missing(tmp_path: Path) -> None:
     # Assert
     assert dest.is_dir()
     assert result.state == ProbeState.NOT_READY
-
-
-def test_probe_and_fetch_extracts_video_id_from_url(tmp_path: Path) -> None:
-    """The watch URL's v= parameter names the file to look for."""
-    # Arrange
-    dest = tmp_path / "subs"
-    opts = build_ydl_opts(dest)
-    ydl = _fake(
-        info=_REQUESTED,
-        write_files=((f"{_VIDEO_ID}.en.vtt", "WEBVTT\n"),),
-    )
-
-    # Act
-    result = probe_and_fetch(_WATCH_URL, opts=opts, ydl_class=ydl, dest_dir=dest)
-
-    # Assert
-    assert result.state == ProbeState.READY
-    assert result.transcript_path is not None
-    assert _VIDEO_ID in result.transcript_path
-
-
-def test_probe_and_fetch_handles_short_url_form(tmp_path: Path) -> None:
-    """The youtu.be short form yields the same video id."""
-    # Arrange
-    dest = tmp_path / "subs"
-    opts = build_ydl_opts(dest)
-    ydl = _fake(
-        info=_REQUESTED,
-        write_files=((f"{_VIDEO_ID}.en.vtt", "WEBVTT\n"),),
-    )
-
-    # Act
-    result = probe_and_fetch(_SHORT_URL, opts=opts, ydl_class=ydl, dest_dir=dest)
-
-    # Assert
-    assert result.state == ProbeState.READY
-    assert result.transcript_path is not None
-    assert _VIDEO_ID in result.transcript_path
 
 
 def test_probe_and_fetch_treats_file_without_requested_subs_as_not_ready(

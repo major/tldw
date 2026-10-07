@@ -63,21 +63,6 @@ def test_settings_defaults_for_new_fields(clean_env: None) -> None:
     assert settings.transcript_langs == ["en", "en-orig"]
 
 
-def test_settings_reads_discord_webhook_url_from_env(
-    monkeypatch: pytest.MonkeyPatch, clean_env: None
-) -> None:
-    """TLDW_DISCORD_WEBHOOK_URL is read as a string."""
-    # Arrange
-    webhook = "https://discord.com/api/webhooks/123/abc"
-    monkeypatch.setenv("TLDW_DISCORD_WEBHOOK_URL", webhook)
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.discord_webhook_url == webhook
-
-
 def test_settings_normalizes_empty_webhook_to_none(
     monkeypatch: pytest.MonkeyPatch, clean_env: None
 ) -> None:
@@ -106,89 +91,84 @@ def test_settings_normalizes_whitespace_webhook_to_none(
     assert settings.discord_webhook_url is None
 
 
-def test_settings_reads_queue_file_from_env(
-    monkeypatch: pytest.MonkeyPatch, clean_env: None
+@pytest.mark.parametrize(
+    "env_name, raw_value, attr, expected",
+    [
+        pytest.param(
+            "TLDW_DISCORD_WEBHOOK_URL",
+            "https://discord.com/api/webhooks/123/abc",
+            "discord_webhook_url",
+            "https://discord.com/api/webhooks/123/abc",
+            id="discord-webhook-url",
+        ),
+        pytest.param(
+            "TLDW_QUEUE_FILE",
+            "/tmp/foo/queue.sqlite3",
+            "queue_file",
+            Path("/tmp/foo/queue.sqlite3"),
+            id="queue-file",
+        ),
+        pytest.param(
+            "TLDW_TRANSCRIPT_DIR",
+            "/tmp/foo/transcripts",
+            "transcript_dir",
+            Path("/tmp/foo/transcripts"),
+            id="transcript-dir",
+        ),
+        pytest.param(
+            "TLDW_TRANSCRIPT_LINES",
+            "20",
+            "transcript_lines",
+            20,
+            id="transcript-lines",
+        ),
+        pytest.param(
+            "TLDW_POLL_BASE_SECONDS",
+            "300.5",
+            "poll_base_seconds",
+            300.5,
+            id="poll-base-seconds",
+        ),
+        pytest.param(
+            "TLDW_POLL_CAP_SECONDS",
+            "1800",
+            "poll_cap_seconds",
+            1800.0,
+            id="poll-cap-seconds",
+        ),
+        pytest.param(
+            "TLDW_GIVEUP_SECONDS",
+            "86400.0",
+            "giveup_seconds",
+            86400.0,
+            id="giveup-seconds",
+        ),
+        pytest.param(
+            "TLDW_YTDLP_COOKIES_FILE",
+            "/etc/yt-cookies.txt",
+            "ytdlp_cookies_file",
+            Path("/etc/yt-cookies.txt"),
+            id="ytdlp-cookies-file",
+        ),
+    ],
+)
+def test_settings_reads_field_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_env: None,
+    env_name: str,
+    raw_value: str,
+    attr: str,
+    expected: object,
 ) -> None:
-    """TLDW_QUEUE_FILE is parsed into a Path."""
+    """Each TLDW_ env override lands on its field with the right type."""
     # Arrange
-    monkeypatch.setenv("TLDW_QUEUE_FILE", "/tmp/foo/queue.sqlite3")
+    monkeypatch.setenv(env_name, raw_value)
 
     # Act
     settings = Settings()
 
     # Assert
-    assert settings.queue_file == Path("/tmp/foo/queue.sqlite3")
-
-
-def test_settings_reads_transcript_dir_from_env(
-    monkeypatch: pytest.MonkeyPatch, clean_env: None
-) -> None:
-    """TLDW_TRANSCRIPT_DIR is parsed into a Path."""
-    # Arrange
-    monkeypatch.setenv("TLDW_TRANSCRIPT_DIR", "/tmp/foo/transcripts")
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.transcript_dir == Path("/tmp/foo/transcripts")
-
-
-def test_settings_reads_transcript_lines_from_env(
-    monkeypatch: pytest.MonkeyPatch, clean_env: None
-) -> None:
-    """TLDW_TRANSCRIPT_LINES is coerced to an int."""
-    # Arrange
-    monkeypatch.setenv("TLDW_TRANSCRIPT_LINES", "20")
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.transcript_lines == 20
-    assert isinstance(settings.transcript_lines, int)
-
-
-def test_settings_reads_poll_base_from_env(
-    monkeypatch: pytest.MonkeyPatch, clean_env: None
-) -> None:
-    """TLDW_POLL_BASE_SECONDS is coerced to a float."""
-    # Arrange
-    monkeypatch.setenv("TLDW_POLL_BASE_SECONDS", "300.5")
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.poll_base_seconds == 300.5
-
-
-def test_settings_reads_giveup_from_env(
-    monkeypatch: pytest.MonkeyPatch, clean_env: None
-) -> None:
-    """TLDW_GIVEUP_SECONDS is coerced to a float."""
-    # Arrange
-    monkeypatch.setenv("TLDW_GIVEUP_SECONDS", "86400.0")
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.giveup_seconds == 86400.0
-
-
-def test_settings_reads_ytdlp_cookies_file_from_env(
-    monkeypatch: pytest.MonkeyPatch, clean_env: None
-) -> None:
-    """TLDW_YTDLP_COOKIES_FILE is parsed into a Path."""
-    # Arrange
-    monkeypatch.setenv("TLDW_YTDLP_COOKIES_FILE", "/etc/yt-cookies.txt")
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.ytdlp_cookies_file == Path("/etc/yt-cookies.txt")
+    assert getattr(settings, attr) == expected
 
 
 def test_settings_rejects_non_integer_lines(
@@ -215,18 +195,6 @@ def test_settings_rejects_negative_giveup(
         Settings()
 
 
-def test_settings_transcript_langs_default_is_exact_codes(clean_env: None) -> None:
-    """The default langs stay exact; the en.* pattern caused 429 storms."""
-    # Arrange
-    # clean_env has already cleared the TLDW_ env vars.
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.transcript_langs == ["en", "en-orig"]
-
-
 def test_settings_transcript_langs_accepts_json_from_env(
     monkeypatch: pytest.MonkeyPatch, clean_env: None
 ) -> None:
@@ -239,27 +207,3 @@ def test_settings_transcript_langs_accepts_json_from_env(
 
     # Assert
     assert settings.transcript_langs == ["de", "fr"]
-
-
-def test_settings_ytdlp_cookies_file_is_none_by_default(clean_env: None) -> None:
-    """No cookies file means no cookies file, not an empty path."""
-    # Arrange
-    # clean_env has already cleared the TLDW_ env vars.
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.ytdlp_cookies_file is None
-
-
-def test_settings_callback_url_remains_optional(clean_env: None) -> None:
-    """Adding the new fields did not make the callback URL required."""
-    # Arrange
-    # clean_env has already cleared the TLDW_ env vars.
-
-    # Act
-    settings = Settings()
-
-    # Assert
-    assert settings.callback_url is None

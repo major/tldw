@@ -967,6 +967,38 @@ def test_lifespan_closes_queue_on_shutdown(tmp_path: Path) -> None:
         app.state.queue.enqueue(_video_entry())
 
 
+def test_lifespan_survives_queue_store_open_failure(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A queue that fails to open leaves the app running and never 500s."""
+    # Arrange: a regular file where the queue's parent directory should be
+    # makes open_store raise during startup.
+    blocking_file = tmp_path / "blocking-file"
+    blocking_file.write_text("not a directory", encoding="utf-8")
+    settings = _make_settings(
+        tmp_path, queue_file=blocking_file / "queue.sqlite3"
+    )
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    with TestClient(app) as client:
+        # Assert: startup swallowed the open failure and kept a safe sentinel.
+        assert app.state.queue is None
+        post = client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+        queue_response = client.get("/queue")
+
+    # Assert
+    assert post.status_code == 200
+    assert "Fixture Video One" in capsys.readouterr().out
+    assert queue_response.status_code == 503
+    assert app.state.queue is None
+
+
 def test_notify_enqueues_entries_into_queue_store(
     tmp_path: Path,
     multi_entry_payload: bytes,

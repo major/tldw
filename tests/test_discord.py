@@ -264,11 +264,14 @@ async def test_send_returns_when_content_empty() -> None:
     assert captured == []
 
 
-async def test_send_raises_on_4xx_other_than_429() -> None:
-    """A 400 is not retried and raises immediately."""
+@pytest.mark.parametrize("status_code", [400, 404, 500])
+async def test_send_raises_without_retry_on_non_429_errors(
+    status_code: int,
+) -> None:
+    """A non-429 error is not retried and raises after one request."""
     # Arrange
     captured: list[httpx2.Request] = []
-    responses = [httpx2.Response(400, text="bad")]
+    responses = [httpx2.Response(status_code, text="bad")]
 
     # Act / Assert
     with pytest.raises(httpx2.HTTPStatusError):
@@ -326,13 +329,19 @@ async def test_send_raises_after_second_429() -> None:
     assert delays == [DEFAULT_RETRY_AFTER_SECONDS]
 
 
-async def test_send_does_not_retry_404() -> None:
-    """A 404 is a permanent error and is never retried."""
+async def test_send_uses_default_retry_after_when_header_is_garbage() -> None:
+    """An unparseable Retry-After header falls back to the default delay."""
     # Arrange
     captured: list[httpx2.Request] = []
-    responses = [httpx2.Response(404)]
+    responses = [
+        httpx2.Response(429, headers={"Retry-After": "soon"}),
+        httpx2.Response(200, json={"id": "x"}),
+    ]
+    delays, sleep = _recording_sleep()
 
-    # Act / Assert
-    with pytest.raises(httpx2.HTTPStatusError):
-        await _send_once(captured, responses, "hello")
-    assert len(captured) == 1
+    # Act
+    await _send_once(captured, responses, "hello", sleep=sleep)
+
+    # Assert
+    assert len(captured) == 2
+    assert delays == [DEFAULT_RETRY_AFTER_SECONDS]

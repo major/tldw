@@ -2,5 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>major/renovate-config"
+  ],
+  "packageRules": [
+    {
+      "description": [
+        "Auto-merge low-risk updates via Renovate: Docker image digests and lockfile maintenance only"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "lockFileMaintenance"
+      ],
+      "automerge": true
+    }
   ]
 }

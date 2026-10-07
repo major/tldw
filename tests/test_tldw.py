@@ -44,6 +44,50 @@ def test_main_calls_uvicorn_run_with_default_port(
     assert isinstance(captured_uvicorn["app"], fastapi.FastAPI)
 
 
+def test_main_installs_probe_filter_on_uvicorn_access(
+    captured_uvicorn: dict[str, Any],
+) -> None:
+    """main() attaches a path-suppressing filter to uvicorn.access.
+
+    Without this, the readiness and liveness probes flood the container log
+    with one INFO line per probe; the filter drops those records while
+    leaving every other endpoint's access line visible.
+    """
+    # Arrange: clear any filter left over from a prior test in this session.
+    access_logger = logging.getLogger("uvicorn.access")
+    for existing in list(access_logger.filters):
+        access_logger.removeFilter(existing)
+
+    # Act
+    tldw_cli.main()
+
+    # Assert: the filter drops ``GET /version`` records but keeps others.
+    matching = [
+        filt
+        for filt in access_logger.filters
+        if isinstance(filt, tldw_cli._SuppressAccessPath)
+    ]
+    assert len(matching) == 1
+    probe_filter = matching[0]
+    probe_record = _make_access_record('10.0.0.1:1234 - "GET /version HTTP/1.1" 200')
+    other_record = _make_access_record('10.0.0.1:1234 - "GET /queue HTTP/1.1" 200')
+    assert probe_filter.filter(probe_record) is False
+    assert probe_filter.filter(other_record) is True
+
+
+def _make_access_record(message: str) -> logging.LogRecord:
+    """Build a LogRecord that mimics what uvicorn hands to its access logger."""
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=0,
+        msg=message,
+        args=(),
+        exc_info=None,
+    )
+
+
 def test_main_loads_callback_url_from_environment(
     captured_uvicorn: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:

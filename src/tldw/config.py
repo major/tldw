@@ -47,6 +47,13 @@ class Settings(BaseSettings):
         TLDW_GIVEUP_SECONDS: stop retrying a video after this many seconds.
         TLDW_YTDLP_COOKIES_FILE: optional Netscape-format cookies file.
         TLDW_TRANSCRIPT_LANGS: JSON list of exact yt-dlp language codes.
+        TLDW_OPENCODE_API_KEY: API key for the OpenCode Go LLM gateway; unset disables takeaways.
+        TLDW_OPENCODE_BASE_URL: base URL for the OpenCode Go gateway.
+        TLDW_OPENCODE_MODEL: model name to request from the gateway.
+        TLDW_LLM_TIMEOUT_SECONDS: per-call timeout for a takeaway request.
+        TLDW_LLM_MAX_OUTPUT_TOKENS: max tokens the takeaway model may generate.
+        TLDW_LLM_MAX_INPUT_CHARS: hard cap on transcript characters sent to the LLM.
+        TLDW_TAKEAWAY_MAX_BULLETS: max bullets kept per takeaway item.
     """
 
     model_config = SettingsConfigDict(
@@ -95,6 +102,21 @@ class Settings(BaseSettings):
     # as "en.*" matches translated variants and triggers 429s.
     transcript_langs: list[str] = Field(default_factory=lambda: ["en", "en-orig"])
 
+    # LLM video takeaways (OpenCode Go). An unset API key turns the whole
+    # feature off; there is no separate enable flag. The base URL and model
+    # default to the OpenCode Go gateway.
+    opencode_api_key: str | None = None
+    opencode_base_url: str = "https://opencode.ai/zen/go"
+    opencode_model: str = "qwen3.8-max"
+    llm_timeout_seconds: float = 180.0
+    llm_max_output_tokens: int = 2048
+    # Hard cap on transcript characters sent to the LLM. Longer transcripts are
+    # truncated with a warning rather than rejected, so one long video cannot
+    # fail the whole run.
+    llm_max_input_chars: int = 300_000
+    # Per-takeaway bullet cap, applied by the analyzer after validation.
+    takeaway_max_bullets: int = 5
+
     @field_validator("discord_webhook_url", mode="before")
     @classmethod
     def _normalize_webhook_url(cls, value: str | None) -> str | None:
@@ -105,6 +127,21 @@ class Settings(BaseSettings):
         ``is None`` guards elsewhere would let the worker start and burn the
         YouTube request budget against a relative URL. mode="before" runs on the
         raw env value, so both env reads and direct construction normalize.
+        """
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("opencode_api_key", mode="before")
+    @classmethod
+    def _normalize_opencode_api_key(cls, value: str | None) -> str | None:
+        """Treat a blank OpenCode Go API key the same as an unset one.
+
+        ``.env.example`` ships ``TLDW_OPENCODE_API_KEY=`` so a copied file has an
+        empty string. An empty string is a valid ``str`` but is falsy, and the
+        feature switch is "no key". Normalizing to ``None`` keeps that contract
+        honest for both env reads and direct construction.
         """
         if value is None:
             return None

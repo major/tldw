@@ -25,6 +25,12 @@ LABEL org.opencontainers.image.created="${BUILD_TIME}"
 ENV TLDW_GIT_SHA=${GIT_SHA} \
     TLDW_BUILD_TIME=${BUILD_TIME}
 
+# Persistent storage defaults. The tldw-data volume mounts at /data, so the
+# queue database and the downloaded subtitle files live there by default.
+# Operators override these only when they want a different layout.
+ENV TLDW_QUEUE_FILE=/data/queue.sqlite3 \
+    TLDW_TRANSCRIPT_DIR=/data/transcripts
+
 WORKDIR /opt/app-root/src
 
 COPY --from=builder --chown=65532:0 /opt/app-root/src/.venv /opt/app-root/src/.venv

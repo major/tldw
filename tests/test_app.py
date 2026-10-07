@@ -16,6 +16,7 @@ import hashlib
 import hmac as _hmac
 import json
 import logging
+import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -28,19 +29,51 @@ from fastapi.testclient import TestClient
 from tldw import _version
 from tldw.app import _renewal_loop, create_app, renewal_delay
 from tldw.config import Settings
+from tldw.feed import VideoEntry
+from tldw.queue import TerminalState, open_store
 
 
-@pytest.fixture
-def settings() -> Settings:
-    """Build Settings pointing at a channels file that does not exist."""
+def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
+    """Build Settings with tmp_path queue/transcript paths and safe defaults."""
     # channel_ids_file carries an alias, so pass kwargs through a mapping the
     # way test_config.py does. That keeps the field name readable here without
     # tripping the type checker on the aliased constructor parameter.
-    kwargs: dict[str, Any] = {
+    defaults: dict[str, Any] = {
         "callback_url": "https://cb.example/pubsub/callback",
         "channel_ids_file": Path("/nonexistent.json"),
+        "queue_file": tmp_path / "queue.sqlite3",
+        "transcript_dir": tmp_path / "transcripts",
     }
-    return Settings(**kwargs)
+    defaults.update(overrides)
+    return Settings(**defaults)
+
+
+def _video_entry(video_id: str = "v_TestAAAAAAAAAAAAA") -> VideoEntry:
+    """Build a VideoEntry for direct queue manipulation in tests."""
+    return VideoEntry(
+        video_id=video_id,
+        channel_id="UC_x5XG1OV2P6uZZ5FSM9Ttw",
+        title=f"Test {video_id}",
+        url=f"https://www.youtube.com/watch?v={video_id}",
+        channel_name="Test Channel",
+        published=None,
+        updated=None,
+    )
+
+
+def _read_titles(queue_file: Path) -> set[str]:
+    """Read every queued title straight from the database file."""
+    conn = sqlite3.connect(str(queue_file))
+    try:
+        return {row[0] for row in conn.execute("SELECT title FROM videos")}
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> Settings:
+    """Build Settings pointing at a channels file that does not exist."""
+    return _make_settings(tmp_path)
 
 
 @pytest.fixture
@@ -221,24 +254,15 @@ def _sign(body: bytes, secret: str = _HMAC_SECRET) -> str:
 
 
 @pytest.fixture
-def settings_with_secret() -> Settings:
+def settings_with_secret(tmp_path: Path) -> Settings:
     """Settings configured with an HMAC secret."""
-    kwargs: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": Path("/nonexistent.json"),
-        "hub_secret": _HMAC_SECRET,
-    }
-    return Settings(**kwargs)
+    return _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
 
 
 @pytest.fixture
-def settings_without_secret() -> Settings:
+def settings_without_secret(tmp_path: Path) -> Settings:
     """Settings with hub_secret=None (the default)."""
-    kwargs: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": Path("/nonexistent.json"),
-    }
-    return Settings(**kwargs)
+    return _make_settings(tmp_path)
 
 
 @pytest.fixture
@@ -456,24 +480,22 @@ def channels_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def settings_with_channels(channels_file: Path) -> Settings:
+def settings_with_channels(tmp_path: Path, channels_file: Path) -> Settings:
     """Settings with a callback URL, two channels, and an HMAC secret."""
-    kwargs: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": channels_file,
-        "hub_secret": "topsecret",
-    }
-    return Settings(**kwargs)
+    return _make_settings(
+        tmp_path, channel_ids_file=channels_file, hub_secret="topsecret"
+    )
 
 
 @pytest.fixture
-def settings_without_callback(channels_file: Path) -> Settings:
+def settings_without_callback(tmp_path: Path, channels_file: Path) -> Settings:
     """Settings with channels but no callback URL."""
-    kwargs: dict[str, Any] = {
-        "channel_ids_file": channels_file,
-        "hub_secret": None,
-    }
-    return Settings(**kwargs)
+    return _make_settings(
+        tmp_path,
+        channel_ids_file=channels_file,
+        hub_secret=None,
+        callback_url=None,
+    )
 
 
 @pytest.fixture
@@ -485,13 +507,9 @@ def empty_channels_file(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def settings_empty_channels(empty_channels_file: Path) -> Settings:
+def settings_empty_channels(tmp_path: Path, empty_channels_file: Path) -> Settings:
     """Settings with a callback URL but an empty channel list."""
-    kwargs: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": empty_channels_file,
-    }
-    return Settings(**kwargs)
+    return _make_settings(tmp_path, channel_ids_file=empty_channels_file)
 
 
 @pytest.fixture
@@ -848,3 +866,309 @@ def test_lifespan_cancels_renewal_task_on_shutdown(
 
     # Assert (after shutdown)
     assert app.state.renewal_task.cancelled() is True
+
+
+# ---------------------------------------------------------------------------
+# Transcript pipeline wiring: queue store, worker task, notify enqueue, /queue.
+#
+# These tests use a real lifespan through TestClient so the startup and
+# shutdown ordering is exercised end to end. The queue and transcript paths
+# live under tmp_path so nothing is written into the repository.
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_opens_queue_store(tmp_path: Path) -> None:
+    """The lifespan opens the queue store and the database file exists."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app):
+        # Assert (while running)
+        assert app.state.queue is not None
+
+    # Assert
+    assert settings.queue_file.exists()
+
+
+def test_lifespan_creates_transcript_dir(tmp_path: Path) -> None:
+    """The lifespan creates the transcript directory at startup."""
+    # Arrange
+    transcript_dir = tmp_path / "tx"
+    settings = _make_settings(tmp_path, transcript_dir=transcript_dir)
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app):
+        # Assert (while running)
+        assert transcript_dir.is_dir()
+
+    # Assert
+    assert transcript_dir.is_dir()
+
+
+def test_lifespan_starts_transcript_task(tmp_path: Path) -> None:
+    """A configured webhook and queue start the transcript worker task."""
+    # Arrange
+    settings = _make_settings(
+        tmp_path, discord_webhook_url="https://discord.com/api/webhooks/x/y"
+    )
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app):
+        # Assert (while the lifespan is running)
+        assert isinstance(app.state.transcript_task, asyncio.Task)
+        assert app.state.transcript_task.done() is False
+
+
+def test_lifespan_skips_transcript_task_without_webhook(tmp_path: Path) -> None:
+    """Without a webhook URL there is nothing to send, so no worker task."""
+    # Arrange
+    settings = _make_settings(tmp_path, discord_webhook_url=None)
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app):
+        # Assert
+        assert app.state.transcript_task is None
+
+
+def test_lifespan_cancels_transcript_task_on_shutdown(tmp_path: Path) -> None:
+    """The lifespan cancels the transcript worker task on shutdown."""
+    # Arrange
+    settings = _make_settings(
+        tmp_path, discord_webhook_url="https://discord.com/api/webhooks/x/y"
+    )
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app):
+        assert app.state.transcript_task is not None
+
+    # Assert
+    assert app.state.transcript_task.cancelled() is True
+
+
+def test_lifespan_closes_queue_on_shutdown(tmp_path: Path) -> None:
+    """The lifespan closes the queue store on shutdown."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app):
+        assert app.state.queue is not None
+
+    # Assert
+    assert app.state.queue is not None
+    with pytest.raises(RuntimeError):
+        app.state.queue.enqueue(_video_entry())
+
+
+def test_lifespan_survives_queue_store_open_failure(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A queue that fails to open leaves the app running and never 500s."""
+    # Arrange: a regular file where the queue's parent directory should be
+    # makes open_store raise during startup.
+    blocking_file = tmp_path / "blocking-file"
+    blocking_file.write_text("not a directory", encoding="utf-8")
+    settings = _make_settings(
+        tmp_path, queue_file=blocking_file / "queue.sqlite3"
+    )
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    with TestClient(app) as client:
+        # Assert: startup swallowed the open failure and kept a safe sentinel.
+        assert app.state.queue is None
+        post = client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+        queue_response = client.get("/queue")
+
+    # Assert
+    assert post.status_code == 200
+    assert "Fixture Video One" in capsys.readouterr().out
+    assert queue_response.status_code == 503
+    assert app.state.queue is None
+
+
+def test_notify_enqueues_entries_into_queue_store(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+) -> None:
+    """A signed delivery enqueues every entry into the queue store."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    with TestClient(app) as client:
+        response = client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+
+    # Assert
+    assert response.status_code == 200
+    store = open_store(settings.queue_file)
+    try:
+        assert store.counts() == {"pending": 2}
+    finally:
+        store.close()
+    assert _read_titles(settings.queue_file) == {
+        "Fixture Video One",
+        "Fixture Video Two",
+    }
+
+
+def test_notify_duplicate_delivery_enqueues_once(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+) -> None:
+    """The same delivery twice still inserts one row per video."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    with TestClient(app) as client:
+        client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+        client.post(
+            "/pubsub/callback", content=multi_entry_payload, headers=headers
+        )
+
+    # Assert
+    store = open_store(settings.queue_file)
+    try:
+        assert store.counts() == {"pending": 2}
+    finally:
+        store.close()
+
+
+def test_notify_enqueue_failure_still_returns_200(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A queue failure is logged but the delivery still returns 200."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    def _boom(entry: VideoEntry) -> None:
+        raise RuntimeError("queue is down")
+
+    # Act
+    with TestClient(app) as client:
+        monkeypatch.setattr(app.state.queue, "enqueue", _boom)
+        with caplog.at_level(logging.ERROR):
+            response = client.post(
+                "/pubsub/callback", content=multi_entry_payload, headers=headers
+            )
+
+    # Assert
+    assert response.status_code == 200
+    assert "Fixture Video One" in capsys.readouterr().out
+    assert any(
+        record.levelno == logging.ERROR and "v_Fixture1AAAAA" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_notify_does_not_enqueue_when_store_unavailable(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With no queue store the delivery still prints and returns 200."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    # Bypass the lifespan: TestClient without the context manager does not run
+    # it, so the manual None survives and no store is opened.
+    app.state.queue = None
+    client = TestClient(app)
+    headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
+
+    # Act
+    response = client.post(
+        "/pubsub/callback", content=multi_entry_payload, headers=headers
+    )
+
+    # Assert
+    assert response.status_code == 200
+    assert "Fixture Video One" in capsys.readouterr().out
+    store = open_store(settings.queue_file)
+    try:
+        assert store.counts() == {"pending": 0}
+    finally:
+        store.close()
+
+
+def test_queue_endpoint_returns_counts_json(tmp_path: Path) -> None:
+    """GET /queue reports counts grouped by state."""
+    # Arrange
+    settings = _make_settings(
+        tmp_path, discord_webhook_url="https://discord.com/api/webhooks/x/y"
+    )
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app) as client:
+        app.state.queue.enqueue(_video_entry("v_a"))
+        app.state.queue.enqueue(_video_entry("v_b"))
+        app.state.queue.mark_terminal("v_a", TerminalState.DONE)
+        response = client.get("/queue")
+
+    # Assert
+    assert response.status_code == 200
+    assert response.json() == {"pending": 1, "DONE": 1}
+
+
+def test_queue_endpoint_returns_503_when_store_unavailable(tmp_path: Path) -> None:
+    """GET /queue returns 503 when the store failed to open."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+    app.state.queue = None
+    client = TestClient(app)
+
+    # Act
+    response = client.get("/queue")
+
+    # Assert
+    assert response.status_code == 503
+    assert response.json() == {"error": "queue store unavailable"}
+
+
+def test_queue_endpoint_uses_lifespan_store(
+    tmp_path: Path,
+    multi_entry_payload: bytes,
+) -> None:
+    """GET /queue reads the store the lifespan opened."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    app = create_app(settings)
+
+    # Act
+    with TestClient(app) as client:
+        post = client.post("/pubsub/callback", content=multi_entry_payload)
+        response = client.get("/queue")
+
+    # Assert
+    assert post.status_code == 200
+    assert response.status_code == 200
+    assert response.json() == {"pending": 2}

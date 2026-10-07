@@ -1,3 +1,13 @@
+# Deployment notes:
+# - The tldw-data PVC is REQUIRED. An emptyDir loses the SQLite queue on a
+#   reschedule, and because the hub does not redeliver after a 200 response,
+#   those videos would be silently dropped.
+# - replicas MUST stay at 1. The worker drains the queue serially and that
+#   serial design is the rate-limit defense for YouTube: a second pod would
+#   double-probe the same videos. SQLite over a network filesystem is also
+#   unsafe. Scale CPU and memory, not replicas.
+# - Supply TLDW_DISCORD_WEBHOOK_URL from a Secret in production rather than a
+#   plain value here, so the webhook URL is not exposed in the pod spec.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,6 +16,11 @@ metadata:
     app: tldw
 spec:
   replicas: 1
+  # Recreate is required so a rolling update does not briefly run two
+  # workers against the same SQLite queue. The serial worker is the
+  # rate-limit defense for YouTube (replicas: 1 is also enforced above).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: tldw
@@ -34,6 +49,29 @@ spec:
               value: "{{ .git_sha }}"
             - name: TLDW_BUILD_TIME
               value: "{{ .build_time }}"
+            # Persistent storage paths. Both live under the mounted /data
+            # volume backed by the tldw-data PVC.
+            - name: TLDW_QUEUE_FILE
+              value: /data/queue.sqlite3
+            - name: TLDW_TRANSCRIPT_DIR
+              value: /data/transcripts
+            # Set from a Secret in production. Left empty here so a cluster
+            # without the Secret still starts. With no webhook the transcript
+            # worker does not run at all, so nothing is downloaded or sent; the
+            # notifications are still enqueued for a later restart.
+            - name: TLDW_DISCORD_WEBHOOK_URL
+              value: ""
+            - name: TLDW_POLL_BASE_SECONDS
+              value: "600"
+            - name: TLDW_POLL_CAP_SECONDS
+              value: "3600"
+            - name: TLDW_GIVEUP_SECONDS
+              value: "172800"
+            - name: TLDW_TRANSCRIPT_LINES
+              value: "10"
+          volumeMounts:
+            - name: tldw-data
+              mountPath: /data
           readinessProbe:
             httpGet:
               path: /version
@@ -44,3 +82,7 @@ spec:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
+      volumes:
+        - name: tldw-data
+          persistentVolumeClaim:
+            claimName: tldw-data

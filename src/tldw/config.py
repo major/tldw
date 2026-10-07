@@ -19,7 +19,7 @@ import logging
 import re
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["Settings", "resolve_channel_ids"]
@@ -38,6 +38,15 @@ class Settings(BaseSettings):
         TLDW_CHANNELS_FILE: path to the JSON channel id list.
         TLDW_CHANNEL_IDS: comma-separated channel ids that override the file.
         TLDW_HUB_SECRET: HMAC secret for signed hub deliveries.
+        TLDW_DISCORD_WEBHOOK_URL: webhook URL for transcript-to-Discord delivery.
+        TLDW_QUEUE_FILE: path to the SQLite queue database.
+        TLDW_TRANSCRIPT_DIR: directory for downloaded subtitle files.
+        TLDW_TRANSCRIPT_LINES: how many transcript lines to send per message.
+        TLDW_POLL_BASE_SECONDS: first retry delay for the worker, in seconds.
+        TLDW_POLL_CAP_SECONDS: maximum retry delay for the worker, in seconds.
+        TLDW_GIVEUP_SECONDS: stop retrying a video after this many seconds.
+        TLDW_YTDLP_COOKIES_FILE: optional Netscape-format cookies file.
+        TLDW_TRANSCRIPT_LANGS: JSON list of exact yt-dlp language codes.
     """
 
     model_config = SettingsConfigDict(
@@ -58,6 +67,49 @@ class Settings(BaseSettings):
         default=None, alias="TLDW_CHANNEL_IDS"
     )
     hub_secret: str | None = None
+
+    # Discord webhook delivery.
+    discord_webhook_url: str | None = None
+
+    # Queue storage.
+    queue_file: Path = Path("queue.sqlite3")
+
+    # Transcript download directory.
+    transcript_dir: Path = Path("transcripts")
+
+    # How many lines of the transcript to send to Discord.
+    transcript_lines: int = 10
+
+    # Worker pacing.
+    poll_base_seconds: float = 600.0  # 10 minutes
+    poll_cap_seconds: float = 3600.0  # 1 hour
+    # ge=0 rejects a negative window at startup instead of silently never
+    # giving up. Pydantic raises a clear ValidationError naming the field.
+    giveup_seconds: float = Field(default=172800.0, ge=0)  # 48 hours
+
+    # Optional yt-dlp cookies (Netscape format) for reliability.
+    ytdlp_cookies_file: Path | None = None
+
+    # pydantic-settings parses a list field from env as JSON, so operators set
+    # TLDW_TRANSCRIPT_LANGS='["en", "en-orig"]'. Exact codes only: a regex such
+    # as "en.*" matches translated variants and triggers 429s.
+    transcript_langs: list[str] = Field(default_factory=lambda: ["en", "en-orig"])
+
+    @field_validator("discord_webhook_url", mode="before")
+    @classmethod
+    def _normalize_webhook_url(cls, value: str | None) -> str | None:
+        """Treat a blank webhook URL the same as an unset one.
+
+        The shipped compose and k8s manifests set TLDW_DISCORD_WEBHOOK_URL to an
+        empty string. Without this, an empty string is a valid ``str``, so the
+        ``is None`` guards elsewhere would let the worker start and burn the
+        YouTube request budget against a relative URL. mode="before" runs on the
+        raw env value, so both env reads and direct construction normalize.
+        """
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 def _validate_channel_ids(channel_ids: list[str]) -> list[str]:

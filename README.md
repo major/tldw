@@ -44,8 +44,25 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_CHANNELS_FILE` | No | `channels.json` | Path to the JSON channel list |
 | `TLDW_CHANNEL_IDS` | No | unset | CSV override for the channel list |
 | `TLDW_HUB_SECRET` | No | unset | HMAC secret for signing deliveries. When set, every incoming notification must carry a matching `X-Hub-Signature: sha1=...` header |
+| `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Webhook URL for transcript-to-Discord delivery. When unset, the transcript worker does not run; videos are enqueued but nothing is downloaded or sent |
+| `TLDW_QUEUE_FILE` | No | `queue.sqlite3` | Path to the SQLite queue database. Persist this directory in container deployments |
+| `TLDW_TRANSCRIPT_DIR` | No | `transcripts` | Directory where downloaded `.vtt` files are kept |
+| `TLDW_TRANSCRIPT_LINES` | No | `10` | How many transcript lines to include in each Discord message |
+| `TLDW_POLL_BASE_SECONDS` | No | `600` | First retry delay in seconds |
+| `TLDW_POLL_CAP_SECONDS` | No | `3600` | Maximum retry delay in seconds |
+| `TLDW_GIVEUP_SECONDS` | No | `172800` | Stop retrying a video after this many seconds |
+| `TLDW_YTDLP_COOKIES_FILE` | No | unset | Optional path to a Netscape-format cookies file. Improves reliability when YouTube applies bot checks |
+| `TLDW_TRANSCRIPT_LANGS` | No | `["en", "en-orig"]` | Language codes to request from yt-dlp. Use exact codes only; a regex like `en.*` triggers 429s |
 
 The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
+
+### What happens when no webhook is configured
+
+When `TLDW_DISCORD_WEBHOOK_URL` is unset, the lifespan does not start the transcript worker at all. Videos are still enqueued (so the hub is acknowledged and the queue is durable), but nothing is downloaded and nothing is sent. Set the webhook URL and restart the service to drain the backlog; the queue survives the restart because of the WAL SQLite store.
+
+### Persistent storage
+
+`TLDW_QUEUE_FILE` (and its parent directory) and `TLDW_TRANSCRIPT_DIR` must live on persistent storage: a named volume in compose, a PersistentVolumeClaim in Kubernetes. An `emptyDir` or a container-local path loses the queue when the pod is rescheduled. Because the PubSubHubbub hub does not redeliver a notification after a 200 response, a lost queue means those videos are silently dropped.
 
 ## Run :rocket:
 
@@ -80,6 +97,23 @@ make container-down
 The container publishes port `8000`. `TLDW_CALLBACK_URL` is still required for
 the app to issue subscriptions. Put it (and any other `TLDW_*` overrides) in a
 local `.env` file and compose will load it for you. :lock:
+
+## Deployment
+
+Persistent storage is mandatory. `TLDW_QUEUE_FILE` (and its parent directory) and `TLDW_TRANSCRIPT_DIR` must live on storage that survives a reschedule: a named volume in compose, a PersistentVolumeClaim in Kubernetes. An `emptyDir` or a container-local path loses the queue, and because the PubSubHubbub hub does not redeliver after a 200 response, that means those videos are silently dropped.
+
+Keep the replica count at exactly one. The worker drains the queue serially, and that serial design is the rate-limit defense for YouTube: a second pod would double-probe the same videos. SQLite over a network filesystem is also unsafe. Scale CPU and memory, not replicas.
+
+Supply `TLDW_DISCORD_WEBHOOK_URL` from a Secret in production, not a plain environment variable, so the webhook URL is not exposed in the pod spec or container logs.
+
+The deployment artifacts:
+
+| File | Purpose |
+| --- | --- |
+| `.env.example` | Complete list of `TLDW_*` variables with comments. Copy to `.env`. |
+| `compose.yml` | Single service plus the `tldw-data` named volume mounted at `/data`. |
+| `k8s/deployment.yaml` | Deployment with the transcript env vars and the `/data` volume mount. |
+| `k8s/pvc.yaml` | PersistentVolumeClaim named `tldw-data` for the queue and transcripts. |
 
 ## Tunnel for local development :globe_with_meridians:
 
@@ -187,7 +221,6 @@ channels.json       # default channel list
 What `tldw` does not do (yet):
 
 - Persist lease state across restarts (in-memory only).
-- Act on notifications beyond printing them.
 - A polling fallback for missed pushes. The Google hub can occasionally drop deliveries; if that bites you, poll the RSS feed in a separate process.
 - Production hardening: no metrics, no health endpoint, no secrets manager, no deploy story.
 - Docker image, systemd unit, or any other packaging. Run `uv run tldw` under your favorite supervisor.

@@ -30,11 +30,13 @@ from xml.etree import ElementTree as ET
 
 import httpx2
 from fastapi import FastAPI, Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 
 from tldw import _version
 from tldw import config as tldw_config
 from tldw import hub as tldw_hub
+from tldw import queue as tldw_queue
+from tldw import worker as tldw_worker
 from tldw.config import Settings
 from tldw.feed import parse_atom
 from tldw.renderer import format_video_line
@@ -171,20 +173,46 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        """Subscribe at startup, run the renewal loop, and close the client on exit."""
+        """Open the queue, subscribe, run the tasks, and clean up on exit."""
         async with httpx2.AsyncClient(transport=transport) as client:
             app.state.http_client = client
+            settings: Settings = app.state.settings
+            settings.transcript_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                app.state.queue = tldw_queue.open_store(settings.queue_file)
+            except Exception:
+                # A malformed or unreadable queue file must not stop the app
+                # from starting; notifications then degrade to print-only.
+                logger.exception(
+                    "failed to open queue store at %s; continuing without it",
+                    settings.queue_file,
+                )
+                app.state.queue = None
             await _subscribe_resolved_channels(app, client)
             app.state.renewal_task = asyncio.create_task(_renewal_loop(app, client))
+            if app.state.queue is None or not settings.discord_webhook_url:
+                # No queue or no usable webhook means the worker has nothing to
+                # drain or nowhere to send; skip the task entirely. The
+                # falsy check also catches an empty string, which is what the
+                # shipped manifests set by default.
+                app.state.transcript_task = None
+            else:
+                app.state.transcript_task = asyncio.create_task(
+                    tldw_worker.transcript_loop(app, client)
+                )
             try:
                 yield
             finally:
-                # Cancel the renewal loop before the client closes so it never
-                # uses a closed client.
-                renewal_task = app.state.renewal_task
-                renewal_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await renewal_task
+                # Cancel both background tasks before the client and the queue
+                # close so neither task can touch a closed resource.
+                for task in (app.state.transcript_task, app.state.renewal_task):
+                    if task is None:
+                        continue
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                if app.state.queue is not None:
+                    app.state.queue.close()
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
@@ -258,9 +286,31 @@ def create_app(
             logger.warning("failed to parse hub delivery body as Atom XML")
             return PlainTextResponse(status_code=200)
 
+        store = getattr(app.state, "queue", None)
         for entry in entries:
             print(format_video_line(entry), flush=True)
+            if store is not None:
+                try:
+                    store.enqueue(entry)
+                except Exception:
+                    # Best effort: the hub already got its 200, so a queue
+                    # failure must not turn into a 500 and an endless retry.
+                    logger.exception("queue enqueue failed for %s", entry.video_id)
 
         return PlainTextResponse(status_code=200)
+
+    @app.get("/queue")
+    async def queue_counts() -> JSONResponse:
+        """Return the queue's record counts grouped by state.
+
+        Operators poll this to see backlog depth and how many videos have been
+        given up on. When the queue store failed to open, returns 503.
+        """
+        store = getattr(app.state, "queue", None)
+        if store is None:
+            return JSONResponse(
+                {"error": "queue store unavailable"}, status_code=503
+            )
+        return JSONResponse(store.counts())
 
     return app

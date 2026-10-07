@@ -16,10 +16,11 @@ RUN python3 -m pip install --no-cache-dir uv==0.12.18 \
 # extract formats. Without it the YouTube extractor logs:
 #   "No supported JavaScript runtime could be found"
 # We install the official static binary here in the builder stage and copy it
-# into the runtime stage below. curl and unzip are available in the builder.
+# into the runtime stage below. The builder image does not ship unzip, so the
+# zip is extracted with `python3 -m zipfile` instead.
 RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
         -o /tmp/deno.zip \
-    && unzip -q /tmp/deno.zip -d /usr/local/bin \
+    && python3 -m zipfile -e /tmp/deno.zip /usr/local/bin \
     && chmod +x /usr/local/bin/deno \
     && rm /tmp/deno.zip \
     && /usr/local/bin/deno --version

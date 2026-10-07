@@ -6,6 +6,11 @@ on:
       - main
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Required for GitHub merge queue: the queue creates a temporary
+  # `gh-readonly-queue/main` ref for every speculative build and the only
+  # way to run CI on it is via this trigger. Safe to add pre-cutover;
+  # no-ops until a ruleset actually configures a merge queue.
+  merge_group:
   workflow_dispatch:
 
 env:

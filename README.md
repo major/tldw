@@ -64,6 +64,34 @@ When `TLDW_DISCORD_WEBHOOK_URL` is unset, the lifespan does not start the transc
 
 `TLDW_QUEUE_FILE` (and its parent directory) and `TLDW_TRANSCRIPT_DIR` must live on persistent storage: a named volume in compose, a PersistentVolumeClaim in Kubernetes. An `emptyDir` or a container-local path loses the queue when the pod is rescheduled. Because the PubSubHubbub hub does not redeliver a notification after a 200 response, a lost queue means those videos are silently dropped.
 
+### Cookies for bot-checked egress IPs :cookie:
+
+If `yt-dlp` logs `ERROR: Did not get any data blocks` over and over on a single video, or the worker output shows `Sign in to confirm you're not a bot`, YouTube has most likely flagged your cluster's egress IP. Recent yt-dlp releases (we pin `>=2026.8.19,<2027`) and the `tv_embedded` and `ios` player-client fallbacks in `build_ydl_opts` make this less frequent, but they do not eliminate it.
+
+The fix is to authenticate the request with cookies from a browser session that is already logged into YouTube. Export them in Netscape format with an extension such as "Get cookies.txt LOCALLY" (Firefox) or "cookies.txt" (Chrome), then save the file somewhere the worker can read, for example `/data/youtube-cookies.txt`, and point `TLDW_YTDLP_COOKIES_FILE` at it.
+
+The shipped `compose.yml` already mounts the `tldw-data` volume at `/data`. Drop the cookies file at `/data/youtube-cookies.txt` and set `TLDW_YTDLP_COOKIES_FILE=/data/youtube-cookies.txt` in the environment, and the worker picks it up on the next start.
+
+In Kubernetes, mount the file from a `Secret` (or a `ConfigMap` if you do not mind the file being readable in etcd):
+
+```yaml
+volumes:
+  - name: youtube-cookies
+    secret:
+      secretName: youtube-cookies
+containers:
+  - name: tldw
+    env:
+      - name: TLDW_YTDLP_COOKIES_FILE
+        value: /etc/secrets/youtube-cookies/cookies.txt
+    volumeMounts:
+      - name: youtube-cookies
+        mountPath: /etc/secrets/youtube-cookies
+        readOnly: true
+```
+
+YouTube session cookies expire, typically after a few weeks of inactivity. When they go stale the original symptom comes back, so refresh the file from the browser and restart the pod.
+
 ## Run :rocket:
 
 ```bash

@@ -126,6 +126,13 @@ def build_ydl_opts(
     that also matches translated variants (``en-de-DE``, ``en-ja``) and triggers
     429s. Do NOT loosen this without reading the upstream issue.
 
+    ``retries`` is lowered from the yt-dlp default of 10 so an empty HLS
+    response fails fast instead of printing a 4 second error burst, and
+    ``socket_timeout`` bounds a hung connection. ``ignore_no_formats_error``
+    keeps a format rotation from failing the probe. ``extractor_args`` tries the
+    default web player first, then the ``ios`` and ``tv_embedded`` clients in
+    order, since bot-checked egress IPs are often accepted by those.
+
     ``cookies_file`` is added as ``cookiefile`` only when provided so an
     unauthenticated probe sends no cookie header at all.
     """
@@ -139,6 +146,23 @@ def build_ydl_opts(
         "noprogress": True,
         # We want a DownloadError raised so the worker can classify it.
         "ignoreerrors": False,
+        # Fail fast on an empty response: the default of 10 retries produces a
+        # 4 second burst of "Did not get any data blocks" from the HLS
+        # downloader. Three rides out a transient blip, and the worker's own
+        # backoff handles anything worse.
+        "retries": 3,
+        # Fail fast on a hung connection instead of waiting on the OS default.
+        # The 48 hour give-up is the upper bound; one probe must not run longer
+        # than a minute.
+        "socket_timeout": 30,
+        # A page with no playable formats should not fail the probe. The worker
+        # still marks the record NOT_READY and reschedules it, which keeps the
+        # probe robust against format rotation.
+        "ignore_no_formats_error": True,
+        # Cluster egress IPs are commonly bot-checked on the default web client
+        # but accepted on ios or tv_embedded, so try the default first and fall
+        # back in that order.
+        "extractor_args": {"youtube": {"player_client": ["default", "ios", "tv_embedded"]}},
     }
     if cookies_file is not None:
         opts["cookiefile"] = str(cookies_file)

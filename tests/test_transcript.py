@@ -374,6 +374,110 @@ def test_build_ydl_opts_accepts_custom_langs(tmp_path: Path) -> None:
     assert opts["subtitleslangs"] == ["de"]
 
 
+def test_build_ydl_opts_sets_retries_to_three(tmp_path: Path) -> None:
+    """Retries are lowered from the yt-dlp default of 10 to fail fast."""
+    # Arrange
+    # Default opts.
+
+    # Act
+    opts = build_ydl_opts(tmp_path)
+
+    # Assert
+    assert opts["retries"] == 3
+
+
+def test_build_ydl_opts_sets_socket_timeout(tmp_path: Path) -> None:
+    """A socket timeout bounds a hung connection so a probe fails fast."""
+    # Arrange
+    # Default opts.
+
+    # Act
+    opts = build_ydl_opts(tmp_path)
+
+    # Assert
+    assert opts["socket_timeout"] == 30
+
+
+def test_build_ydl_opts_ignores_no_formats_error(tmp_path: Path) -> None:
+    """A page with no playable formats does not fail the probe."""
+    # Arrange
+    # Default opts.
+
+    # Act
+    opts = build_ydl_opts(tmp_path)
+
+    # Assert
+    assert opts["ignore_no_formats_error"] is True
+
+
+def test_build_ydl_opts_uses_fallback_player_clients(tmp_path: Path) -> None:
+    """The default web client runs first, then ios and tv_embedded fallbacks."""
+    # Arrange
+    # Default opts.
+
+    # Act
+    opts = build_ydl_opts(tmp_path)
+
+    # Assert
+    assert opts["extractor_args"] == {
+        "youtube": {"player_client": ["default", "ios", "tv_embedded"]}
+    }
+
+
+def test_build_ydl_opts_new_opts_apply_with_cookies(tmp_path: Path) -> None:
+    """The cookies block does not shadow the four new resilience options."""
+    # Arrange
+    cookies = tmp_path / "cookies.txt"
+
+    # Act
+    opts = build_ydl_opts(tmp_path, cookies_file=cookies)
+
+    # Assert
+    assert opts["retries"] == 3
+    assert opts["socket_timeout"] == 30
+    assert opts["ignore_no_formats_error"] is True
+    assert opts["extractor_args"] == {
+        "youtube": {"player_client": ["default", "ios", "tv_embedded"]}
+    }
+    assert opts["cookiefile"] == str(cookies)
+
+
+def test_build_ydl_opts_new_opts_apply_with_langs(tmp_path: Path) -> None:
+    """A custom lang tuple does not drop the four new resilience options."""
+    # Arrange
+    langs = ("en",)
+
+    # Act
+    opts = build_ydl_opts(tmp_path, langs=langs)
+
+    # Assert
+    assert opts["retries"] == 3
+    assert opts["socket_timeout"] == 30
+    assert opts["ignore_no_formats_error"] is True
+    assert opts["extractor_args"] == {
+        "youtube": {"player_client": ["default", "ios", "tv_embedded"]}
+    }
+
+
+def test_build_ydl_opts_preserves_existing_keys(tmp_path: Path) -> None:
+    """The pre-existing probe options are still present after the change."""
+    # Arrange
+    # Default opts.
+
+    # Act
+    opts = build_ydl_opts(tmp_path)
+
+    # Assert
+    assert opts["skip_download"] is True
+    assert opts["writesubtitles"] is True
+    assert opts["writeautomaticsub"] is True
+    assert opts["subtitleslangs"] == ["en", "en-orig"]
+    assert str(opts["outtmpl"]).startswith(str(tmp_path))
+    assert opts["quiet"] is True
+    assert opts["noprogress"] is True
+    assert opts["ignoreerrors"] is False
+
+
 # ---------------------------------------------------------------------------
 # probe_and_fetch
 # ---------------------------------------------------------------------------

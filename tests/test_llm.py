@@ -36,7 +36,9 @@ from tldw.llm import (  # noqa: E402
     TakeawayBullet,
     Takeaways,
     session_id_for,
+    snap_timestamps,
 )
+from tldw.transcript import Cue  # noqa: E402
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -251,3 +253,142 @@ def test_opencode_analyzer_requires_api_key() -> None:
     analyzer = OpencodeGoAnalyzer(_settings(opencode_api_key=None))
     with pytest.raises(ValueError):
         analyzer._build_client()
+
+
+# ---------------------------------------------------------------------------
+# snap_timestamps
+# ---------------------------------------------------------------------------
+
+
+def _takeaways_with_bullet_times(bullet_times: list[list[int]]) -> Takeaways:
+    """Build valid Takeaways where each item's bullets use the given times.
+
+    ``Takeaways`` enforces exactly three items, so ``bullet_times`` must hold
+    three inner lists. Each inner list is one takeaway's bullet timestamps.
+    """
+    return Takeaways.model_validate(
+        {
+            "items": [
+                {
+                    "title": f"Takeaway {i}",
+                    "summary": f"Summary {i}",
+                    "bullets": [
+                        {"text": f"Bullet {i}-{n}", "timestamp_seconds": seconds}
+                        for n, seconds in enumerate(times)
+                    ],
+                }
+                for i, times in enumerate(bullet_times)
+            ]
+        }
+    )
+
+
+def _all_bullet_timestamps(takeaways: Takeaways) -> list[int]:
+    """Return every bullet timestamp across all items, in item then bullet order."""
+    return [
+        bullet.timestamp_seconds
+        for item in takeaways.items
+        for bullet in item.bullets
+    ]
+
+
+class TestSnapTimestamps:
+    """Snapping LLM-returned timestamps to real cue starts."""
+
+    def test_snap_to_exact_match(self) -> None:
+        """A bullet whose timestamp exactly matches a cue start is unchanged."""
+        takeaways = _takeaways_with_bullet_times([[60], [60], [60]])
+        cues = [
+            Cue(start=0.0, text="a"),
+            Cue(start=60.0, text="b"),
+            Cue(start=120.0, text="c"),
+        ]
+
+        result = snap_timestamps(takeaways, cues)
+
+        assert _all_bullet_timestamps(result) == [60, 60, 60]
+
+    def test_snap_to_nearest(self) -> None:
+        """A bullet between two cues snaps to the nearer one."""
+        takeaways = _takeaways_with_bullet_times([[75], [75], [75]])
+        cues = [
+            Cue(start=0.0, text="a"),
+            Cue(start=60.0, text="b"),
+            Cue(start=120.0, text="c"),
+        ]
+
+        result = snap_timestamps(takeaways, cues)
+
+        assert _all_bullet_timestamps(result) == [60, 60, 60]
+
+    def test_snap_below_first_cue(self) -> None:
+        """A bullet before all cues snaps to the first cue."""
+        takeaways = _takeaways_with_bullet_times([[10], [10], [10]])
+        cues = [Cue(start=60.0, text="a"), Cue(start=120.0, text="b")]
+
+        # The 50s drift is over the default 30s limit, so raise the limit to
+        # isolate the "no cue before this timestamp" boundary behavior.
+        result = snap_timestamps(takeaways, cues, max_drift_seconds=1000)
+
+        assert _all_bullet_timestamps(result) == [60, 60, 60]
+
+    def test_snap_above_last_cue(self) -> None:
+        """A bullet after all cues snaps to the last cue."""
+        takeaways = _takeaways_with_bullet_times([[999], [999], [999]])
+        cues = [Cue(start=0.0, text="a"), Cue(start=60.0, text="b")]
+
+        # The 939s drift is over the default 30s limit, so raise the limit to
+        # isolate the "no cue after this timestamp" boundary behavior.
+        result = snap_timestamps(takeaways, cues, max_drift_seconds=1000)
+
+        assert _all_bullet_timestamps(result) == [60, 60, 60]
+
+    def test_kept_when_drift_exceeds_threshold(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A bullet far from any cue is kept as-is and logs a WARNING."""
+        takeaways = _takeaways_with_bullet_times([[999], [999], [999]])
+        cues = [
+            Cue(start=0.0, text="a"),
+            Cue(start=60.0, text="b"),
+            Cue(start=120.0, text="c"),
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            result = snap_timestamps(takeaways, cues)
+
+        assert _all_bullet_timestamps(result) == [999, 999, 999]
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+    def test_empty_cues_returns_unchanged(self) -> None:
+        """Empty cues list returns the takeaways unchanged."""
+        takeaways = _takeaways_with_bullet_times([[10], [20], [30]])
+
+        result = snap_timestamps(takeaways, [])
+
+        assert result is takeaways
+
+    def test_multiple_takeaways_all_processed(self) -> None:
+        """All takeaways and all bullets are processed; structure preserved."""
+        takeaways = _takeaways_with_bullet_times([[10, 70], [15, 75], [20, 80]])
+        cues = [
+            Cue(start=0.0, text="a"),
+            Cue(start=60.0, text="b"),
+            Cue(start=120.0, text="c"),
+        ]
+
+        result = snap_timestamps(takeaways, cues)
+
+        assert _all_bullet_timestamps(result) == [0, 60, 0, 60, 0, 60]
+        assert [item.title for item in result.items] == [
+            "Takeaway 0",
+            "Takeaway 1",
+            "Takeaway 2",
+        ]
+        assert [item.summary for item in result.items] == [
+            "Summary 0",
+            "Summary 1",
+            "Summary 2",
+        ]
+        assert len(result.items) == 3
+        assert all(len(item.bullets) == 2 for item in result.items)

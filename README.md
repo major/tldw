@@ -58,7 +58,7 @@ The file is gitignored-by-convention. Do not commit it if you have private chann
 
 ### What happens when no webhook is configured
 
-When `TLDW_DISCORD_WEBHOOK_URL` is unset the worker still enqueues videos and downloads their transcripts to `TLDW_TRANSCRIPT_DIR`. Only the Discord send is skipped. Nothing is lost: the queue rows stay in the database, so an operator can set the webhook URL later and the pending transcripts are delivered on the next drain.
+When `TLDW_DISCORD_WEBHOOK_URL` is unset, the lifespan does not start the transcript worker at all. Videos are still enqueued (so the hub is acknowledged and the queue is durable), but nothing is downloaded and nothing is sent. Set the webhook URL and restart the service to drain the backlog; the queue survives the restart because of the WAL SQLite store.
 
 ### Persistent storage
 

@@ -15,9 +15,6 @@ the ``Retry-After`` header (or a default when the header is missing), and any
 other failure raises immediately. Bounded retries keep a Discord outage from
 turning into an infinite loop inside one send; the worker handles longer
 outages through its own backoff and queue schedule.
-
-This module is wired by ``worker.py`` in the next commit and currently has no
-callers.
 """
 
 from __future__ import annotations

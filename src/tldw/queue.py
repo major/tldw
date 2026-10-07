@@ -46,12 +46,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_QUEUE_FILE: Path = Path("queue.sqlite3")
-
-# The worker paces transcript probes so it does not hammer YouTube. Defined here
-# so the queue and the worker share one source of truth.
-DEFAULT_PACING_SECONDS: float = 5.0
-
 # The videos table is the whole queue. ``terminal_state`` is NULL while a video
 # is still pending and holds a TerminalState value once resolved. The partial
 # index covers only pending rows, which is exactly the set next_due scans, so
@@ -208,28 +202,22 @@ class QueueStore:
         self._ensure_open()
         if now is None:
             now = time.time()
-        try:
-            cursor = self._conn.execute(
-                "INSERT OR IGNORE INTO videos "
-                "(video_id, url, channel_id, channel_name, title, published, "
-                " enqueued_at, attempts, next_attempt_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
-                (
-                    entry.video_id,
-                    entry.url,
-                    entry.channel_id,
-                    entry.channel_name,
-                    entry.title,
-                    entry.published,
-                    now,
-                    now,
-                ),
-            )
-        except sqlite3.IntegrityError:
-            # Safety net for a concurrent writer that wins the race between our
-            # check and insert. Treated the same as an ignored duplicate.
-            logger.debug("duplicate enqueue for video %s ignored", entry.video_id)
-            return False
+        cursor = self._conn.execute(
+            "INSERT OR IGNORE INTO videos "
+            "(video_id, url, channel_id, channel_name, title, published, "
+            " enqueued_at, attempts, next_attempt_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            (
+                entry.video_id,
+                entry.url,
+                entry.channel_id,
+                entry.channel_name,
+                entry.title,
+                entry.published,
+                now,
+                now,
+            ),
+        )
         self._conn.commit()
         return cursor.rowcount > 0
 

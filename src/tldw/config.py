@@ -19,7 +19,7 @@ import logging
 import re
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["Settings", "resolve_channel_ids"]
@@ -94,6 +94,22 @@ class Settings(BaseSettings):
     # TLDW_TRANSCRIPT_LANGS='["en", "en-orig"]'. Exact codes only: a regex such
     # as "en.*" matches translated variants and triggers 429s.
     transcript_langs: list[str] = Field(default_factory=lambda: ["en", "en-orig"])
+
+    @field_validator("discord_webhook_url", mode="before")
+    @classmethod
+    def _normalize_webhook_url(cls, value: str | None) -> str | None:
+        """Treat a blank webhook URL the same as an unset one.
+
+        The shipped compose and k8s manifests set TLDW_DISCORD_WEBHOOK_URL to an
+        empty string. Without this, an empty string is a valid ``str``, so the
+        ``is None`` guards elsewhere would let the worker start and burn the
+        YouTube request budget against a relative URL. mode="before" runs on the
+        raw env value, so both env reads and direct construction normalize.
+        """
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 def _validate_channel_ids(channel_ids: list[str]) -> list[str]:

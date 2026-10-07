@@ -87,7 +87,7 @@ async def transcript_loop(
     through the keyword arguments. The default ``sleep`` is ``asyncio.sleep``.
     """
     settings: Settings = app.state.settings
-    if settings.discord_webhook_url is None:
+    if not settings.discord_webhook_url:
         logger.info("transcript worker skipping: TLDW_DISCORD_WEBHOOK_URL is not set")
         return
     settings.transcript_dir.mkdir(parents=True, exist_ok=True)

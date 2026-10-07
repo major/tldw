@@ -78,6 +78,34 @@ def test_settings_reads_discord_webhook_url_from_env(
     assert settings.discord_webhook_url == webhook
 
 
+def test_settings_normalizes_empty_webhook_to_none(
+    monkeypatch: pytest.MonkeyPatch, clean_env: None
+) -> None:
+    """An empty TLDW_DISCORD_WEBHOOK_URL is treated as unset."""
+    # Arrange
+    monkeypatch.setenv("TLDW_DISCORD_WEBHOOK_URL", "")
+
+    # Act
+    settings = Settings()
+
+    # Assert
+    assert settings.discord_webhook_url is None
+
+
+def test_settings_normalizes_whitespace_webhook_to_none(
+    monkeypatch: pytest.MonkeyPatch, clean_env: None
+) -> None:
+    """A whitespace-only webhook URL is treated as unset."""
+    # Arrange
+    monkeypatch.setenv("TLDW_DISCORD_WEBHOOK_URL", "   ")
+
+    # Act
+    settings = Settings()
+
+    # Assert
+    assert settings.discord_webhook_url is None
+
+
 def test_settings_reads_queue_file_from_env(
     monkeypatch: pytest.MonkeyPatch, clean_env: None
 ) -> None:

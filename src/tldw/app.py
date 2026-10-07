@@ -190,9 +190,11 @@ def create_app(
                 app.state.queue = None
             await _subscribe_resolved_channels(app, client)
             app.state.renewal_task = asyncio.create_task(_renewal_loop(app, client))
-            if app.state.queue is None or settings.discord_webhook_url is None:
-                # No queue or no webhook means the worker has nothing to drain
-                # or nowhere to send; skip the task entirely.
+            if app.state.queue is None or not settings.discord_webhook_url:
+                # No queue or no usable webhook means the worker has nothing to
+                # drain or nowhere to send; skip the task entirely. The
+                # falsy check also catches an empty string, which is what the
+                # shipped manifests set by default.
                 app.state.transcript_task = None
             else:
                 app.state.transcript_task = asyncio.create_task(

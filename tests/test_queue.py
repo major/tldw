@@ -18,7 +18,6 @@ import pytest
 
 from tldw.feed import VideoEntry
 from tldw.queue import (
-    DEFAULT_PACING_SECONDS,
     QueueStore,
     TerminalState,
     open_store,
@@ -583,19 +582,6 @@ def test_operations_after_close_raise_runtime_error(tmp_path: Path) -> None:
         store.mark_terminal("dQw4w9WgXcQ", TerminalState.DONE)
     with pytest.raises(RuntimeError):
         store.counts()
-
-
-def test_default_pacing_seconds_is_exported() -> None:
-    """The worker's pacing constant has its single source of truth here."""
-    # Arrange
-    # The worker imports DEFAULT_PACING_SECONDS from this module.
-
-    # Act
-    value = DEFAULT_PACING_SECONDS
-
-    # Assert
-    assert value == 5.0
-    assert isinstance(value, float)
 
 
 def test_open_store_returns_queue_store(tmp_path: Path) -> None:

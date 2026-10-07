@@ -16,6 +16,11 @@ metadata:
     app: tldw
 spec:
   replicas: 1
+  # Recreate is required so a rolling update does not briefly run two
+  # workers against the same SQLite queue. The serial worker is the
+  # rate-limit defense for YouTube (replicas: 1 is also enforced above).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: tldw
@@ -51,8 +56,9 @@ spec:
             - name: TLDW_TRANSCRIPT_DIR
               value: /data/transcripts
             # Set from a Secret in production. Left empty here so a cluster
-            # without the Secret still starts; the worker queues and downloads
-            # but does not send to Discord.
+            # without the Secret still starts. With no webhook the transcript
+            # worker does not run at all, so nothing is downloaded or sent; the
+            # notifications are still enqueued for a later restart.
             - name: TLDW_DISCORD_WEBHOOK_URL
               value: ""
             - name: TLDW_POLL_BASE_SECONDS

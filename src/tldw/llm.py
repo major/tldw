@@ -15,9 +15,10 @@ Discord: it turns text into validated :class:`Takeaways`.
 from __future__ import annotations
 
 import asyncio
+import bisect
 import hashlib
 import logging
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel, Field
@@ -28,6 +29,11 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from tldw.config import Settings
 
+if TYPE_CHECKING:
+    # Annotation-only import so the type checker can resolve ``Cue`` without
+    # adding a runtime dependency from this module to ``transcript.py``.
+    from tldw.transcript import Cue
+
 __all__ = [
     "TakeawayBullet",
     "Takeaway",
@@ -35,6 +41,7 @@ __all__ = [
     "TakeawayAnalyzer",
     "OpencodeGoAnalyzer",
     "session_id_for",
+    "snap_timestamps",
     "SYSTEM_PROMPT",
 ]
 
@@ -191,3 +198,64 @@ class OpencodeGoAnalyzer:
             for item in takeaways.items
         ]
         return Takeaways(items=capped_items)
+
+
+def snap_timestamps(
+    takeaways: Takeaways,
+    cues: list["Cue"],
+    *,
+    max_drift_seconds: int = 30,
+) -> Takeaways:
+    """Snap each bullet's timestamp_seconds to the nearest cue start.
+
+    The LLM is asked to cite timestamps from the rendered transcript's
+    ``[m:ss]`` anchors, but it can still drift. This function guarantees
+    every returned timestamp lands on a real subtitle cue by snapping to
+    the nearest ``cue.start`` from the parsed transcript.
+
+    Bullets whose nearest cue is more than ``max_drift_seconds`` away are
+    kept as-is and logged at WARNING level. A large drift is a hallucination
+    signal (the LLM cited a moment the transcript does not cover) and is
+    worth seeing in logs even though we keep the bullet (a slightly-off
+    link beats a missing takeaway).
+
+    Returns a new ``Takeaways`` with adjusted timestamps; does not mutate
+    the input. If ``cues`` is empty, returns ``takeaways`` unchanged (nothing
+    to snap to).
+    """
+    if not cues:
+        return takeaways
+
+    # Cue starts are expected in source order, but sorting here makes the
+    # bisect search correct even if a parser ever emits them out of order.
+    starts = sorted(cue.start for cue in cues)
+    new_items: list[Takeaway] = []
+    for takeaway in takeaways.items:
+        new_bullets: list[TakeawayBullet] = []
+        for bullet in takeaway.bullets:
+            original = bullet.timestamp_seconds
+            # bisect_left gives the first cue at or after the timestamp. The
+            # nearest cue is either that one or the one just before it.
+            idx = bisect.bisect_left(starts, original)
+            candidates: list[float] = []
+            if idx < len(starts):
+                candidates.append(starts[idx])
+            if idx > 0:
+                candidates.append(starts[idx - 1])
+            nearest = min(candidates, key=lambda value: abs(value - original))
+            drift = abs(nearest - original)
+            if drift <= max_drift_seconds:
+                new_bullets.append(
+                    bullet.model_copy(update={"timestamp_seconds": int(nearest)})
+                )
+            else:
+                logger.warning(
+                    "takeaway bullet timestamp %ds drifts %.1fs from the "
+                    "nearest cue, over the %ds limit; keeping it as-is",
+                    original,
+                    drift,
+                    max_drift_seconds,
+                )
+                new_bullets.append(bullet)
+        new_items.append(takeaway.model_copy(update={"bullets": new_bullets}))
+    return takeaways.model_copy(update={"items": new_items})

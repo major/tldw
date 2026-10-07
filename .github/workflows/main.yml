@@ -90,3 +90,59 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Check homehosted token
+        if: github.ref == 'refs/heads/main'
+        env:
+          HOMEHOSTED_PAT: ${{ secrets.HOMEHOSTED_PAT }}
+        run: |
+          if [ -z "$HOMEHOSTED_PAT" ]; then
+            echo "::error::HOMEHOSTED_PAT must be a token with read/write access to major/homehosted"
+            exit 1
+          fi
+
+      - name: Checkout homehosted repository
+        if: github.ref == 'refs/heads/main'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: major/homehosted
+          token: ${{ secrets.HOMEHOSTED_PAT }}
+          path: homehosted
+
+      - name: Configure git
+        if: github.ref == 'refs/heads/main'
+        working-directory: homehosted
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update deployment manifest
+        if: github.ref == 'refs/heads/main'
+        working-directory: homehosted
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          MANIFEST="apps/tldw/helm/helmrelease.yaml"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::notice::$MANIFEST not found; skipping deployment update"
+            exit 0
+          fi
+          sed -i -E "s|tag: latest@sha256:[a-f0-9]{64}|tag: latest@${DIGEST}|g" "$MANIFEST"
+
+      - name: Commit and push changes
+        if: github.ref == 'refs/heads/main'
+        working-directory: homehosted
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          MANIFEST="apps/tldw/helm/helmrelease.yaml"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::notice::$MANIFEST not found; skipping deployment commit"
+            exit 0
+          fi
+          if git diff --quiet "$MANIFEST"; then
+            echo "No changes to commit"
+          else
+            git add "$MANIFEST"
+            git commit -m "🤖 Update tldw deployment to ${DIGEST}"
+            git push

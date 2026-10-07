@@ -86,6 +86,7 @@ jobs:
           push: ${{ github.ref == 'refs/heads/main' }}
           build-args: |
             GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha

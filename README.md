@@ -181,9 +181,9 @@ Five-second version:
 ## Development :wrench:
 
 ```bash
-make check         # ty + pyright + pytest with branch coverage (the CI gate)
+make check         # ty + pytest with branch coverage (the CI gate)
 make test          # pytest only
-make typecheck     # ty + pyright
+make typecheck     # ty
 make install       # uv sync --locked --all-extras --dev
 ```
 

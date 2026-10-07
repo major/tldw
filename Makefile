@@ -1,4 +1,4 @@
-.PHONY: help install typecheck ty test coverage check version container-build container-up container-down
+.PHONY: help install typecheck ty test check version container-build container-up container-down
 
 .DEFAULT_GOAL := check
 
@@ -22,9 +22,6 @@ typecheck: ty ## Run all type checkers
 
 test: ## Run tests with branch coverage
 	uv run pytest
-
-coverage: ## Run tests and write coverage.xml for Codecov
-	uv run --locked pytest --cov-report=xml:coverage.xml
 
 check: typecheck test ## Run all required checks
 

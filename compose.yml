@@ -1,0 +1,12 @@
+services:
+  tldw:
+    container_name: tldw
+    build:
+      context: .
+      dockerfile: Containerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped

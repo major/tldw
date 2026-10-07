@@ -1,0 +1,532 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw"/>
+ <id>yt:channel:_x5XG1OV2P6uZZ5FSM9Ttw</id>
+ <yt:channelId>_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+ <title>Google for Developers</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw"/>
+ <author>
+  <name>Google for Developers</name>
+  <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+ </author>
+ <published>2007-08-23T00:34:43+00:00</published>
+ <entry>
+  <id>yt:video:lTQHImoeuEY</id>
+  <yt:videoId>lTQHImoeuEY</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Top 3 new model launches at Gemini Audio at Night</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=lTQHImoeuEY"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-10-06T23:00:23+00:00</published>
+  <updated>2026-10-06T23:31:08+00:00</updated>
+  <media:group>
+   <media:title>Top 3 new model launches at Gemini Audio at Night</media:title>
+   <media:content url="https://www.youtube.com/v/lTQHImoeuEY?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/lTQHImoeuEY/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Catch up on the highlights from Gemini Audio at Night in San Francisco! Google DeepMind’s Paige Bailey breaks down the top 3 developer takeaways from the event and shows how these new audio models come to life through hands-on demos.
+
+Discover how you can build with:
+*Gemini 3.8 TTS models: Text-to-speech with voice personalization, including custom emotions and resonance. 
+*Gemini 3.5 Live Translate: Real-time translation for audio and video feeds across 100+ languages. 
+*Gemini 3.8 Live models: New multimodal features, including function calls and other features built specifically for developers. 
+
+Learn more about Gemini Audio and let us know what you build in the comments → https://goo.gle/3TCXNzx 
+
+
+Subscribe to Google for Developers → https://goo.gle/developers
+
+
+Speaker: Paige Bailey
+Products Mentioned: Gemini</media:description>
+   <media:community>
+    <media:starRating count="128" average="5.00" min="1" max="5"/>
+    <media:statistics views="8473"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:anPsS6huQk0</id>
+  <yt:videoId>anPsS6huQk0</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Introducing EmbeddingGemma 2: An open model for natively multimodal embeddings</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=anPsS6huQk0"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-10-06T16:10:20+00:00</published>
+  <updated>2026-10-06T19:37:13+00:00</updated>
+  <media:group>
+   <media:title>Introducing EmbeddingGemma 2: An open model for natively multimodal embeddings</media:title>
+   <media:content url="https://www.youtube.com/v/anPsS6huQk0?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/anPsS6huQk0/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Sebastian Russo, Ivan Llanos, and Sahil Dua from Google DeepMind introduce EmbeddingGemma 2, a lightweight open model that maps text, images, video, and audio into a single unified embedding space.
+
+At just 740 million parameters, EmbeddingGemma 2 is engineered for on-device use cases. Watch this  video to discover:
+
+*EmbeddingGemma 2’s modular architecture with optional audio and vision encoders
+*Instant media search and video moment retrieval running fully offline on device
+*Retrieval-augmented generation (RAG) pipelines where sensitive data never leaves the hardware
+*Fine-tuning for domain-specific use cases
+
+
+🔗 Resources:
+Learn about the model → https://goo.gle/4hE3Lb9
+Read the developer guide → https://goo.gle/4hFnyqO 
+Explore on-device embeddings with Google AI Edge → https://goo.gle/3VSXqS1 
+Download model weights from HuggingFace → https://goo.gle/4i45qbp 
+Get started with the Gemma Cookbook → https://goo.gle/3TCsqVO 
+
+Have questions? Drop them in the comments.
+
+
+
+Subscribe to Google for Developers → https://goo.gle/developers    
+
+
+
+Speakers: Sebastian Russo, Ivan Llanos, Sahil Dua
+Products Mentioned: Gemma, Google AI Edge</media:description>
+   <media:community>
+    <media:starRating count="2831" average="5.00" min="1" max="5"/>
+    <media:statistics views="140100"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:8Xv5BLnXzgI</id>
+  <yt:videoId>8Xv5BLnXzgI</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>🧾 Building a voice-to-print mirror with Gemini</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/8Xv5BLnXzgI"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-10-01T23:00:21+00:00</published>
+  <updated>2026-10-05T18:27:21+00:00</updated>
+  <media:group>
+   <media:title>🧾 Building a voice-to-print mirror with Gemini</media:title>
+   <media:content url="https://www.youtube.com/v/8Xv5BLnXzgI?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/8Xv5BLnXzgI/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Gayatri built a custom journaling device using Nano Banana and Gemini through Antigravity and Google AI Studio to transform spoken memories into physical keepsakes.
+
+🔗 Explore the build → https://goo.gle/4z2vI3I 
+
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+
+Products Mentioned: Gemini, Google Antigravity, Google AI Studio
+Speaker: Gayatri Kalra</media:description>
+   <media:community>
+    <media:starRating count="221" average="5.00" min="1" max="5"/>
+    <media:statistics views="14066"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:Rnz9mOyxk0k</id>
+  <yt:videoId>Rnz9mOyxk0k</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>How to transform audio into physical prints using Gemini and Google AI Studio</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=Rnz9mOyxk0k"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-10-01T19:00:13+00:00</published>
+  <updated>2026-10-04T23:40:04+00:00</updated>
+  <media:group>
+   <media:title>How to transform audio into physical prints using Gemini and Google AI Studio</media:title>
+   <media:content url="https://www.youtube.com/v/Rnz9mOyxk0k?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/Rnz9mOyxk0k/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Using Nano Banana and Gemini through Antigravity and Google AI Studio, Gayatri found a way to transform spoken words and everyday thoughts into lasting visual artifacts. Watch to explore the build and see how memories become physical prints.
+
+Try building today → https://goo.gle/3VfKNQR 
+
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+
+Products Mentioned: Gemini, Google Antigravity, Google AI Studio
+Speaker: Gayatri Kalra</media:description>
+   <media:community>
+    <media:starRating count="151" average="5.00" min="1" max="5"/>
+    <media:statistics views="16303"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:s82Ho5HdltE</id>
+  <yt:videoId>s82Ho5HdltE</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Per-Layer Embeddings (PLE) in Gemma 4 explained</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=s82Ho5HdltE"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-25T16:00:04+00:00</published>
+  <updated>2026-10-01T21:02:18+00:00</updated>
+  <media:group>
+   <media:title>Per-Layer Embeddings (PLE) in Gemma 4 explained</media:title>
+   <media:content url="https://www.youtube.com/v/s82Ho5HdltE?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/s82Ho5HdltE/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Learn how per-layer embeddings, or PLE, work in Gemma 4 E2B and E4B, Google's open source language model. Google DeepMind’s Maarten Grootendorst breaks down how PLE gives each token a layer-specific embedding for more diverse representation, boosting model performance without increasing the parameters used during computation.
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Gemma 4
+Speaker: Maarten Grootendorst</media:description>
+   <media:community>
+    <media:starRating count="137" average="5.00" min="1" max="5"/>
+    <media:statistics views="15520"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:-G431WC_-RM</id>
+  <yt:videoId>-G431WC_-RM</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>The next generation of voice AI with Google DeepMind and Sierra AI</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=-G431WC_-RM"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-24T23:02:25+00:00</published>
+  <updated>2026-10-01T20:35:13+00:00</updated>
+  <media:group>
+   <media:title>The next generation of voice AI with Google DeepMind and Sierra AI</media:title>
+   <media:content url="https://www.youtube.com/v/-G431WC_-RM?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/-G431WC_-RM/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Valeria Wu (Google DeepMind) and Soham Ray (Sierra AI) explore the latest advances in native audio models and the challenges of building better real-time voice experiences. They discuss conversational latency, multilingual code-switching, agentic voice tasks, and how new benchmarks can better measure the quality of real-world dialogue.
+
+Watch along and learn:
+*How native speech-to-speech models preserve the tone and prosody traditional pipelines lose.
+*The engineering tradeoffs behind sub-second response times and seamless, human-like interruption handling.
+*How models smoothly navigate mixed-language phrasing and dialect shifts without dropping context.
+*How to orchestrate API calls and stateful tasks while maintaining an uninterrupted vocal flow.
+*Moving beyond Word Error Rate toward dynamic metrics that measure conversational flow and turn-taking.
+
+
+🔗Resources:
+Gemini Audio → https://goo.gle/47uVQrZ
+
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Google DeepMind
+Speakers: Valeria Wu, Soham Ray 
+
+Chapters:
+00:00 – Introduction &amp; The State of Real-Time Voice AI
+0:50 – Understanding Sierra &amp; TAU
+01:48 – Latency
+03:52 – Fluid Multilinguality
+04:22 – What’s Next?</media:description>
+   <media:community>
+    <media:starRating count="210" average="5.00" min="1" max="5"/>
+    <media:statistics views="21505"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:YDCB8Bk1OBE</id>
+  <yt:videoId>YDCB8Bk1OBE</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Gemma 4 12B: The encoder-free model explained</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=YDCB8Bk1OBE"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-22T23:00:10+00:00</published>
+  <updated>2026-09-26T08:46:35+00:00</updated>
+  <media:group>
+   <media:title>Gemma 4 12B: The encoder-free model explained</media:title>
+   <media:content url="https://www.youtube.com/v/YDCB8Bk1OBE?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/YDCB8Bk1OBE/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Learn what makes Gemma 4 12B, Google's encoder-free open source language model, unique in the Gemma 4 family. Google DeepMind’s Maarten Grootendorst explains how it processes audio and image inputs without encoders.
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Gemma 4
+Speaker: Maarten Grootendorst</media:description>
+   <media:community>
+    <media:starRating count="461" average="5.00" min="1" max="5"/>
+    <media:statistics views="52195"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:4oxA9o_OmWo</id>
+  <yt:videoId>4oxA9o_OmWo</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Understand the Gemma 4 model family</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=4oxA9o_OmWo"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-21T23:00:36+00:00</published>
+  <updated>2026-10-03T10:19:43+00:00</updated>
+  <media:group>
+   <media:title>Understand the Gemma 4 model family</media:title>
+   <media:content url="https://www.youtube.com/v/4oxA9o_OmWo?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/4oxA9o_OmWo/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Learn about the Gemma 4 family of multimodal open source language models from Google. Google DeepMind’s Maarten Grootendorst walks through all five model sizes across four architectures, from the efficient E2B and E4B models with per-layer embeddings to the encoder-free 12B, the 26B mixture of experts model, and the most capable 31B dense model.
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Gemma 4
+Speaker: Maarten Grootendorst</media:description>
+   <media:community>
+    <media:starRating count="255" average="5.00" min="1" max="5"/>
+    <media:statistics views="26612"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:FVkp6tc2rNY</id>
+  <yt:videoId>FVkp6tc2rNY</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>🪄 Gemini Live API in action</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/FVkp6tc2rNY"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-15T19:00:17+00:00</published>
+  <updated>2026-09-26T14:44:08+00:00</updated>
+  <media:group>
+   <media:title>🪄 Gemini Live API in action</media:title>
+   <media:content url="https://www.youtube.com/v/FVkp6tc2rNY?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/FVkp6tc2rNY/hqdefault.jpg" width="480" height="360"/>
+   <media:description>See what’s new in the Gemini Live API! Thor Schaeff breaks down async function calling, Proactive Audio, real-time context injection with sendClientContent, frontier-level background reasoning in native audio.
+
+Products Mentioned: Gemini Live API, Gemini
+Speaker: Thor Schaeff</media:description>
+   <media:community>
+    <media:starRating count="109" average="5.00" min="1" max="5"/>
+    <media:statistics views="4071"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:3CyW24Pkz4o</id>
+  <yt:videoId>3CyW24Pkz4o</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>What's new in the Gemini Live API</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=3CyW24Pkz4o"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-15T17:04:04+00:00</published>
+  <updated>2026-09-26T10:53:00+00:00</updated>
+  <media:group>
+   <media:title>What's new in the Gemini Live API</media:title>
+   <media:content url="https://www.youtube.com/v/3CyW24Pkz4o?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/3CyW24Pkz4o/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Did you know that Gemini Live API enables low-latency, real-time voice and vision interactions with Gemini 3.8 Live and Gemini 3.8 Live Extended Thinking? 
+
+Watch along as Google DeepMind’s Thor Schaeff demonstrates:
+* *Async function* calling for background tool execution
+* *Proactive audio,* meaning the agent only speaks when relevant
+* *The context injection* with send_ client_content feature
+* *Frontier-level* background reasoning with Gemini 3.8 Live Extended Thinking
+
+Check out the Gemini Live API today and begin using these native audio experiences for yourself.
+
+🔗 *Resources:*
+* Gemini Live API overview → https://ai.google.dev/gemini-api/docs/live-api
+* Live API in Google AI Studio → https://aistudio.google.com/live-api
+
+
+#Gemini #AIDevelopers
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Gemini Live API, Gemini
+Speaker: Thor Schaeff</media:description>
+   <media:community>
+    <media:starRating count="500" average="5.00" min="1" max="5"/>
+    <media:statistics views="45156"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:M1q063UD-gw</id>
+  <yt:videoId>M1q063UD-gw</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Manage your agents while you’re on the move with the Antigravity Remote Control</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/M1q063UD-gw"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-11T19:30:14+00:00</published>
+  <updated>2026-10-04T08:17:22+00:00</updated>
+  <media:group>
+   <media:title>Manage your agents while you’re on the move with the Antigravity Remote Control</media:title>
+   <media:content url="https://www.youtube.com/v/M1q063UD-gw?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/M1q063UD-gw/hqdefault.jpg" width="480" height="360"/>
+   <media:description>The Antigravity Remote Control lets you manage and monitor agents across different machines from a single interface. Launch your long-running agents, monitor them via browser or app, and step in exactly when needed. 
+
+To get started with Antigravity Remote Control go to
+https://antigravity.google/docs/remote-control/</media:description>
+   <media:community>
+    <media:starRating count="72" average="5.00" min="1" max="5"/>
+    <media:statistics views="5077"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:CBzLIKfWpdg</id>
+  <yt:videoId>CBzLIKfWpdg</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Celebrating one billion Gemma downloads</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=CBzLIKfWpdg"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-04T19:00:35+00:00</published>
+  <updated>2026-10-04T13:59:25+00:00</updated>
+  <media:group>
+   <media:title>Celebrating one billion Gemma downloads</media:title>
+   <media:content url="https://www.youtube.com/v/CBzLIKfWpdg?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/CBzLIKfWpdg/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Google DeepMind's Paige Bailey catches up with developers at the Gemma 1 billion downloads event to hear how they're using Gemma in their work.
+
+Watch along and hear about:
+* Blind and low vision accessibility research
+* AI race car coaching
+* Interactive create writing possibilities
+* Running Gemma 4 locally
+
+#Gemma #AIDevelopers
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Gemma
+Speakers, Paige Bailey, Daniel Han, Rahul Chand, Selali Adobor, Alex Chen, Miguel Villa Floran, Zack Li, Alan Zhu</media:description>
+   <media:community>
+    <media:starRating count="197" average="5.00" min="1" max="5"/>
+    <media:statistics views="21020"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:HyfhaGNVKUA</id>
+  <yt:videoId>HyfhaGNVKUA</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Agentic approaches to processing long videos with Gemini</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/HyfhaGNVKUA"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-01T23:00:14+00:00</published>
+  <updated>2026-10-01T16:53:34+00:00</updated>
+  <media:group>
+   <media:title>Agentic approaches to processing long videos with Gemini</media:title>
+   <media:content url="https://www.youtube.com/v/HyfhaGNVKUA?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/HyfhaGNVKUA/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Save this for your next project with heavy video processing 📌
+
+Agentic video understanding transforms how developers process long-form content across demanding applications, leading to massive token reductions, faster latency, and better accuracy.
+
+
+Products Mentioned: Gemini 
+Speaker: Maarten Grootendorst</media:description>
+   <media:community>
+    <media:starRating count="134" average="5.00" min="1" max="5"/>
+    <media:statistics views="4671"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:ytjgy30Cono</id>
+  <yt:videoId>ytjgy30Cono</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Agentic video understanding in Gemini</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=ytjgy30Cono"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-01T17:00:12+00:00</published>
+  <updated>2026-09-26T07:26:39+00:00</updated>
+  <media:group>
+   <media:title>Agentic video understanding in Gemini</media:title>
+   <media:content url="https://www.youtube.com/v/ytjgy30Cono?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/ytjgy30Cono/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Processing long videos can use a lot of tokens. Learn how to do this more efficiently using our latest agentic video understanding capability available in Gemini 3.7 Flash, 3.6 Flash, and 3.5 Flash-Lite. In this video, Google DeepMind’s Maarten Grootendorst explains how agentic video understanding works, and how  this approach reduces token costs while improving accuracy on the parts of the video that actually matter.
+
+Resources: https://goo.gle/4xzZaxJ
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Gemini
+Speaker: Maarten Grootendorst</media:description>
+   <media:community>
+    <media:starRating count="155" average="5.00" min="1" max="5"/>
+    <media:statistics views="15927"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:Rrr2gdbvNFU</id>
+  <yt:videoId>Rrr2gdbvNFU</yt:videoId>
+  <yt:channelId>UC_x5XG1OV2P6uZZ5FSM9Ttw</yt:channelId>
+  <title>Koray Kavukcuoglu on frontier models, coding agents, and building AGI</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=Rrr2gdbvNFU"/>
+  <author>
+   <name>Google for Developers</name>
+   <uri>https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw</uri>
+  </author>
+  <published>2026-09-01T15:00:31+00:00</published>
+  <updated>2026-10-03T05:47:14+00:00</updated>
+  <media:group>
+   <media:title>Koray Kavukcuoglu on frontier models, coding agents, and building AGI</media:title>
+   <media:content url="https://www.youtube.com/v/Rrr2gdbvNFU?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/Rrr2gdbvNFU/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Google DeepMind SVP and Chief AI Architect Koray Kavukcuoglu joins host Logan Kilpatrick to reflect on the journey from DeepMind’s early reinforcement learning milestones to Gemini and what it means to build AGI at Google. 
+
+Watch along and learn:
+* What made Gemini 3.7 Flash a breakthrough for engineers
+* The ambitions of the Gemini 4 pre-training run
+* What it takes to stay at the frontier of AI research
+* How co-building AGI with users shapes everything the Google DeepMind team does
+
+00:00 Intro
+00:24 From models to coding agents
+03:07 Gemini 4 pre-training
+04:08 Why the frontier is all that matters
+06:38 Leading frontier AI at Google
+08:53 Why there's no test for AGI
+10:58 Early days at DeepMind
+15:08 Atari vs. real-world ambiguity
+17:18 20 years of deep learning
+18:47 The reality of engineering hill climbs
+21:05 Why Google is the place to build AGI
+22:19 Parallel model development
+23:34 The shift to agentic coding
+24:57 What makes models more intelligent
+
+Subscribe to Google for Developers → https://goo.gle/developers   
+
+Products Mentioned: Gemini 
+Speakers: Logan Kilpatrick, Koray Kavukcuoglu</media:description>
+   <media:community>
+    <media:starRating count="252" average="5.00" min="1" max="5"/>
+    <media:statistics views="24176"/>
+   </media:community>
+  </media:group>
+ </entry>
+</feed>

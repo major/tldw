@@ -1,0 +1,7 @@
+# YouTube channels tracked by this project.
+# Edit the `name` field to give each channel a friendly, human-readable label.
+channels:
+  - channel_id: UC_ywfvIR2JrnMuZt33y7QYQ
+    name: CiovaccoCapital
+  - channel_id: UCvJZEG5x-DVYZKTz--pS39w
+    name: FX Evolution - Trading Academy

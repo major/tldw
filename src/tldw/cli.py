@@ -12,6 +12,7 @@ import logging
 
 import uvicorn
 
+from tldw import _version
 from tldw.app import create_app
 from tldw.config import Settings
 
@@ -29,6 +30,9 @@ def main() -> None:
     When TLDW_CALLBACK_URL is unset the app still starts, but no subscriptions
     are issued, so a warning names the variable an operator must set.
     """
+    # Emit the build identity before anything else so a slow startup (such as
+    # waiting on the hub) does not push the banner past other log lines.
+    _version.log_banner(logger)
     settings = Settings()
     if settings.callback_url is None:
         logger.warning(

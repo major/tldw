@@ -32,6 +32,7 @@ import httpx2
 from fastapi import FastAPI, Request
 from starlette.responses import PlainTextResponse
 
+from tldw import _version
 from tldw import config as tldw_config
 from tldw import hub as tldw_hub
 from tldw.config import Settings
@@ -187,6 +188,16 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
+
+    @app.get("/version")
+    async def version() -> dict[str, str]:
+        """Return the build identity as JSON.
+
+        Kubernetes probes and operators use this to confirm which commit and
+        build is live without scraping container logs. The values mirror what
+        the startup banner logs on stdout, so both surfaces agree.
+        """
+        return _version.snapshot()
 
     @app.get("/pubsub/callback")
     async def verify_subscription(request: Request) -> PlainTextResponse:

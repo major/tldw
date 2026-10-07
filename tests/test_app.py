@@ -25,6 +25,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from tldw import _version
 from tldw.app import _renewal_loop, create_app, renewal_delay
 from tldw.config import Settings
 
@@ -145,6 +146,61 @@ def test_get_no_params_returns_404(client: TestClient) -> None:
 
     # Assert
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /version endpoint and startup banner.
+#
+# The endpoint and the banner both read the module-level constants in
+# tldw._version, which are captured at import time. Tests monkeypatch those
+# constants so the test does not depend on the value of TLDW_GIT_SHA in the
+# developer's shell.
+# ---------------------------------------------------------------------------
+
+
+def test_version_returns_build_identity(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The endpoint reports the git sha, build time, and start time."""
+    # Arrange
+    monkeypatch.setattr(_version, "GIT_SHA", "abc1234")
+    monkeypatch.setattr(_version, "BUILD_TIME", "2026-10-07T10:35:00+00:00")
+    monkeypatch.setattr(_version, "STARTED_AT", "2026-10-07T10:36:00+00:00")
+
+    # Act
+    response = client.get("/version")
+
+    # Assert
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == {
+        "git_sha": "abc1234",
+        "build_time": "2026-10-07T10:35:00+00:00",
+        "started_at": "2026-10-07T10:36:00+00:00",
+    }
+
+
+def test_log_banner_emits_one_info_line(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The banner logs the build identity in a single INFO line."""
+    # Arrange
+    monkeypatch.setattr(_version, "GIT_SHA", "deadbeef")
+    monkeypatch.setattr(_version, "BUILD_TIME", "2026-10-07T10:35:00+00:00")
+    monkeypatch.setattr(_version, "STARTED_AT", "2026-10-07T10:36:00+00:00")
+    logger = logging.getLogger("tldw.test_banner")
+
+    # Act
+    with caplog.at_level(logging.INFO, logger="tldw.test_banner"):
+        _version.log_banner(logger)
+
+    # Assert
+    info_records = [record for record in caplog.records if record.levelno == logging.INFO]
+    assert len(info_records) == 1
+    record = info_records[0]
+    assert "deadbeef" in record.getMessage()
+    assert "2026-10-07T10:35:00+00:00" in record.getMessage()
+    assert "2026-10-07T10:36:00+00:00" in record.getMessage()
 
 
 # ---------------------------------------------------------------------------

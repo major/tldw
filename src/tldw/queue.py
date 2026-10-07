@@ -55,7 +55,8 @@ DEFAULT_PACING_SECONDS: float = 5.0
 # The videos table is the whole queue. ``terminal_state`` is NULL while a video
 # is still pending and holds a TerminalState value once resolved. The partial
 # index covers only pending rows, which is exactly the set next_due scans, so
-# it stays small even as completed history grows.
+# it stays small even as completed history grows. ``rate_limit_streak`` counts
+# consecutive 429 outcomes for the row; any other outcome resets it to 0.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
     video_id        TEXT PRIMARY KEY,
@@ -70,12 +71,20 @@ CREATE TABLE IF NOT EXISTS videos (
     next_attempt_at REAL NOT NULL,
     transcript_path TEXT,
     terminal_state  TEXT,
-    detail          TEXT
+    detail          TEXT,
+    rate_limit_streak INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_due
     ON videos(next_attempt_at)
     WHERE terminal_state IS NULL;
 """
+
+# Queue files created before rate_limit_streak existed need the column added.
+# The ALTER is attempted on every open; a "duplicate column name" error just
+# means the column is already present, which is the state we want.
+_MIGRATIONS = (
+    "ALTER TABLE videos ADD COLUMN rate_limit_streak INTEGER NOT NULL DEFAULT 0",
+)
 
 
 class TerminalState(StrEnum):
@@ -110,6 +119,7 @@ class QueueRecord:
     transcript_path: str | None
     terminal_state: TerminalState | None
     detail: str | None
+    rate_limit_streak: int
 
 
 class QueueStore:
@@ -134,6 +144,13 @@ class QueueStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
+        for statement in _MIGRATIONS:
+            try:
+                self._conn.execute(statement)
+            except sqlite3.OperationalError:
+                # The column already exists on a database created with the
+                # current schema; nothing to migrate.
+                pass
         self._conn.commit()
 
     def _ensure_open(self) -> None:
@@ -170,6 +187,13 @@ class QueueStore:
             transcript_path=row["transcript_path"],
             terminal_state=terminal_state,
             detail=row["detail"],
+            # Defensive: a row read before the column migration ran has no
+            # rate_limit_streak, so treat a missing column as a zero streak.
+            rate_limit_streak=(
+                row["rate_limit_streak"]
+                if "rate_limit_streak" in row.keys()
+                else 0
+            ),
         )
 
     def enqueue(self, entry: VideoEntry, *, now: float | None = None) -> bool:
@@ -250,6 +274,48 @@ class QueueStore:
         if transcript_path is not None:
             assignments.append("transcript_path = ?")
             params.append(transcript_path)
+        params.append(video_id)
+        self._conn.execute(
+            f"UPDATE videos SET {', '.join(assignments)} WHERE video_id = ?",
+            params,
+        )
+        self._conn.commit()
+
+    def reschedule(
+        self,
+        video_id: str,
+        *,
+        next_attempt_at: float | None = None,
+        transcript_path: str | None = None,
+        rate_limit_streak: int | None = None,
+        now: float | None = None,
+    ) -> None:
+        """Update schedule, transcript path, or rate-limit streak in place.
+
+        Every argument left as None is left unchanged on the row. This method
+        never touches ``attempts`` or ``last_attempt_at``; those belong to
+        ``mark_attempt`` and must be incremented exactly once per probe. Use
+        ``reschedule`` in the worker's outcome branches so a single probe does
+        not count as two attempts.
+
+        ``now`` is accepted for symmetry with ``mark_attempt`` but is unused:
+        this method only ever changes the columns named in the arguments.
+        """
+        self._ensure_open()
+        assignments: list[str] = []
+        params: list[object] = []
+        if next_attempt_at is not None:
+            assignments.append("next_attempt_at = ?")
+            params.append(next_attempt_at)
+        if transcript_path is not None:
+            assignments.append("transcript_path = ?")
+            params.append(transcript_path)
+        if rate_limit_streak is not None:
+            assignments.append("rate_limit_streak = ?")
+            params.append(rate_limit_streak)
+        if not assignments:
+            # Nothing to change; skip the UPDATE and the commit entirely.
+            return
         params.append(video_id)
         self._conn.execute(
             f"UPDATE videos SET {', '.join(assignments)} WHERE video_id = ?",

@@ -25,9 +25,6 @@ GIVE_UP_NEVER: to yt-dlp, "captions still pending" and "captions will never
 come" look identical, and the cutoff is how we tell them apart. A video that
 hits the rate limit ``DEFAULT_MAX_RATE_LIMIT_ATTEMPTS`` times in a row is marked
 GIVE_UP_RATE_LIMITED_DEAD so a dead rate-limit budget stops consuming the loop.
-
-This module is wired into the app lifespan in commit 7. Until then it has no
-callers outside its tests.
 """
 
 from __future__ import annotations
@@ -145,6 +142,12 @@ async def _process_record(
 ) -> None:
     """Process one queue record: probe (if needed), parse, send, mark.
 
+    ``attempts`` is incremented exactly once per probe, by the pre-probe
+    ``mark_attempt`` call. Every later update goes through ``reschedule`` so a
+    single probe never counts as two attempts. The rate-limit streak is bumped
+    only on a RATE_LIMITED outcome and reset to zero on any other outcome,
+    which is what makes the give-up budget mean "consecutive 429s".
+
     ``now`` is the clock seam for tests and defaults to ``time.time()``.
     ``sleep`` is accepted for symmetry with the other seams and so future
     per-step pacing can use it without changing the signature.
@@ -164,20 +167,12 @@ async def _process_record(
 
     record_path: str | None
     if record.transcript_path is None:
-        # Count the attempt and pre-arm a retry BEFORE the blocking probe. If
-        # the process is killed mid-probe the row is already scheduled, and if
-        # the probe raises the same schedule stands, so attempts is bumped
-        # exactly once per probe. jitter=0.0 keeps the schedule deterministic:
-        # the serial single worker does not need to de-synchronize with peers.
-        retry_delay = backoff_delay(
-            record.attempts + 1,
-            base=settings.poll_base_seconds,
-            cap=settings.poll_cap_seconds,
-            jitter=0.0,
-        )
-        store.mark_attempt(
-            record.video_id, now=now, next_attempt_at=now + retry_delay
-        )
+        # Count the attempt BEFORE the blocking probe. This is the only place
+        # attempts is incremented, so one probe means one attempt. If the
+        # process is killed mid-probe the row is already marked as attempted
+        # and will be picked up again. jitter=0.0 keeps the schedule
+        # deterministic: the serial single worker needs no fleet de-sync.
+        store.mark_attempt(record.video_id, now=now)
         try:
             result = await asyncio.to_thread(
                 probe,
@@ -188,20 +183,28 @@ async def _process_record(
             )
         except Exception:
             logger.exception("probe raised for %s", record.video_id)
-            # The pre-probe mark already armed the retry.
+            delay = backoff_delay(
+                record.attempts + 1,
+                base=settings.poll_base_seconds,
+                cap=settings.poll_cap_seconds,
+                jitter=0.0,
+            )
+            store.reschedule(record.video_id, next_attempt_at=now + delay)
             return
 
         if result.state is ProbeState.READY:
-            store.mark_attempt(
+            store.reschedule(
                 record.video_id,
-                now=now,
                 next_attempt_at=now + DEFAULT_RECORD_PACING,
                 transcript_path=result.transcript_path,
+                rate_limit_streak=0,
             )
             record_path = result.transcript_path
         elif result.state is ProbeState.RATE_LIMITED:
-            rate_limit_attempts = record.attempts + 1
-            if rate_limit_attempts >= DEFAULT_MAX_RATE_LIMIT_ATTEMPTS:
+            # Count consecutive 429s on the row. Any other outcome below resets
+            # this to 0, so the give-up budget only trips on a real streak.
+            new_streak = record.rate_limit_streak + 1
+            if new_streak >= DEFAULT_MAX_RATE_LIMIT_ATTEMPTS:
                 store.mark_terminal(
                     record.video_id,
                     TerminalState.GIVE_UP_RATE_LIMITED_DEAD,
@@ -209,13 +212,15 @@ async def _process_record(
                 )
             else:
                 delay = backoff_delay(
-                    rate_limit_attempts,
+                    new_streak,
                     base=300.0,
                     cap=settings.poll_cap_seconds,
                     jitter=0.0,
                 )
-                store.mark_attempt(
-                    record.video_id, now=now, next_attempt_at=now + delay
+                store.reschedule(
+                    record.video_id,
+                    next_attempt_at=now + delay,
+                    rate_limit_streak=new_streak,
                 )
             return
         elif result.state is ProbeState.UNAVAILABLE:
@@ -232,8 +237,10 @@ async def _process_record(
                 cap=settings.poll_cap_seconds,
                 jitter=0.0,
             )
-            store.mark_attempt(
-                record.video_id, now=now, next_attempt_at=now + delay
+            store.reschedule(
+                record.video_id,
+                next_attempt_at=now + delay,
+                rate_limit_streak=0,
             )
             return
     else:
@@ -260,7 +267,9 @@ async def _process_record(
             cap=settings.poll_cap_seconds,
             jitter=0.0,
         )
-        store.mark_attempt(record.video_id, now=now, next_attempt_at=now + delay)
+        # A send failure is not a probe, so it must not bump attempts. The
+        # cached transcript_path means the retry will not re-probe YouTube.
+        store.reschedule(record.video_id, next_attempt_at=now + delay)
         return
 
     # Success.

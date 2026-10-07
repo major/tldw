@@ -11,6 +11,7 @@ the guard, the pacing, and the serial-processing guarantee.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -48,14 +49,18 @@ def _entry(video_id: str = "dQw4w9WgXcQ", **overrides: object) -> VideoEntry:
     return VideoEntry(**defaults)  # type: ignore[arg-type]
 
 
-def _make_settings(**overrides: Any) -> Settings:
-    """Build Settings with the transcript pipeline configured."""
+def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
+    """Build Settings with the transcript pipeline configured.
+
+    ``tmp_path`` is required so the transcript directory and queue file live
+    under the test's temporary directory instead of a hard-coded path.
+    """
     defaults: dict[str, Any] = {
         "callback_url": "https://cb.example/pubsub/callback",
         "channel_ids_file": Path("/nonexistent.json"),
         "discord_webhook_url": "https://discord.com/api/webhooks/x/y",
-        "transcript_dir": Path("/tmp/test-transcripts"),
-        "queue_file": Path("/tmp/test-queue.sqlite3"),
+        "transcript_dir": tmp_path / "transcripts",
+        "queue_file": tmp_path / "queue.sqlite3",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -172,6 +177,20 @@ def _fetch(store: QueueStore, now: float) -> QueueRecord:
     return record
 
 
+def _read_row(tmp_path: Path, video_id: str) -> sqlite3.Row:
+    """Read a videos row straight from the file, including terminal rows."""
+    conn = sqlite3.connect(str(tmp_path / "queue.sqlite3"))
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM videos WHERE video_id = ?", (video_id,)
+        ).fetchone()
+        assert row is not None
+        return row
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Loop guards
 # ---------------------------------------------------------------------------
@@ -182,9 +201,7 @@ async def test_loop_returns_early_without_webhook_url(
 ) -> None:
     """No webhook URL means the worker returns before it does any work."""
     # Arrange
-    settings = _make_settings(
-        discord_webhook_url=None, transcript_dir=tmp_path / "transcripts"
-    )
+    settings = _make_settings(tmp_path, discord_webhook_url=None)
     app = _make_app(settings, store)
 
     # Act
@@ -212,7 +229,7 @@ async def test_ready_record_sends_and_marks_done(
 ) -> None:
     """A cached transcript is sent once and the record is marked DONE."""
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     _enqueue_with_path(store, tmp_path, "dQw4w9WgXcQ", now)
     record = _fetch(store, now)
@@ -245,7 +262,7 @@ async def test_ready_message_contains_title_and_quoted_lines(
     the worker caches that path, then reads and sends it.
     """
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     vtt = _write_vtt(tmp_path, "dQw4w9WgXcQ")
     store.enqueue(_entry(), now=now)
@@ -273,10 +290,12 @@ async def test_ready_message_contains_title_and_quoted_lines(
     assert store.counts() == {"pending": 0, "DONE": 1}
 
 
-async def test_not_ready_record_rearms_with_backoff(store: QueueStore) -> None:
-    """A NOT_READY probe stays pending and is rescheduled by the base delay."""
+async def test_not_ready_record_rearms_with_backoff(
+    store: QueueStore, tmp_path: Path
+) -> None:
+    """A NOT_READY probe stays pending, rescheduled, and counts one attempt."""
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     store.enqueue(_entry(), now=now)
     record = _fetch(store, now)
@@ -299,12 +318,16 @@ async def test_not_ready_record_rearms_with_backoff(store: QueueStore) -> None:
     updated = store.next_due(now=now + 100_000)
     assert updated is not None
     assert abs((updated.next_attempt_at - now) - settings.poll_base_seconds) <= 1.0
+    # Regression guard: one probe must increment attempts exactly once.
+    assert updated.attempts == 1
 
 
-async def test_unavailable_marks_give_up_immediately(store: QueueStore) -> None:
+async def test_unavailable_marks_give_up_immediately(
+    store: QueueStore, tmp_path: Path
+) -> None:
     """An UNAVAILABLE probe is permanent and marks the record terminal."""
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     store.enqueue(_entry(), now=now)
     record = _fetch(store, now)
@@ -328,10 +351,11 @@ async def test_unavailable_marks_give_up_immediately(store: QueueStore) -> None:
 
 async def test_rate_limited_uses_short_base_and_remains_pending(
     store: QueueStore,
+    tmp_path: Path,
 ) -> None:
     """A first 429 uses the short 300 second base and stays pending."""
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     store.enqueue(_entry(), now=now)
     record = _fetch(store, now)
@@ -354,20 +378,27 @@ async def test_rate_limited_uses_short_base_and_remains_pending(
     updated = store.next_due(now=now + 100_000)
     assert updated is not None
     assert abs((updated.next_attempt_at - now) - 300.0) <= 1.0
+    assert updated.attempts == 1
+    assert updated.rate_limit_streak == 1
 
 
 async def test_rate_limited_exhausts_budget_and_marks_give_up(
     store: QueueStore,
+    tmp_path: Path,
 ) -> None:
-    """The eighth consecutive 429 marks the record GIVE_UP_RATE_LIMITED_DEAD."""
+    """The eighth consecutive 429 marks the record GIVE_UP_RATE_LIMITED_DEAD.
+
+    The streak, not the cumulative attempt count, drives the budget. This test
+    seeds the streak at 7 with a reschedule so the next 429 is the eighth in a
+    row. test_consecutive_429s_count_toward_give_up drives all eight probes.
+    """
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     store.enqueue(_entry(), now=now)
-    for _ in range(7):
-        store.mark_attempt("dQw4w9WgXcQ", now=now, next_attempt_at=now)
+    store.reschedule("dQw4w9WgXcQ", rate_limit_streak=7)
     record = _fetch(store, now)
-    assert record.attempts == 7
+    assert record.rate_limit_streak == 7
 
     # Act
     await _process_record(
@@ -388,10 +419,11 @@ async def test_rate_limited_exhausts_budget_and_marks_give_up(
 
 async def test_record_past_giveup_marks_give_up_never_without_probing(
     store: QueueStore,
+    tmp_path: Path,
 ) -> None:
     """A record past the give-up window is retired without a probe."""
     # Arrange
-    settings = _make_settings(giveup_seconds=0.0)
+    settings = _make_settings(tmp_path, giveup_seconds=0.0)
     now = 1000.0
     store.enqueue(_entry(), now=now - 1)
     record = _fetch(store, now)
@@ -419,7 +451,7 @@ async def test_transcript_path_present_skips_probe_and_sends_only(
 ) -> None:
     """A cached transcript path skips the probe and goes straight to send."""
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     _enqueue_with_path(store, tmp_path, "dQw4w9WgXcQ", now)
     record = _fetch(store, now)
@@ -441,6 +473,9 @@ async def test_transcript_path_present_skips_probe_and_sends_only(
 
     # Assert
     assert sender.calls == 1
+    # The cached path skips the probe, so attempts stays at the one recorded
+    # when the path was stored.
+    assert _read_row(tmp_path, "dQw4w9WgXcQ")["attempts"] == 1
 
 
 async def test_send_failure_rearms_without_terminal_state(
@@ -448,7 +483,7 @@ async def test_send_failure_rearms_without_terminal_state(
 ) -> None:
     """A Discord failure re-arms the record and never marks it terminal."""
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     _enqueue_with_path(store, tmp_path, "dQw4w9WgXcQ", now)
     record = _fetch(store, now)
@@ -477,12 +512,22 @@ async def test_send_failure_rearms_without_terminal_state(
     updated = store.next_due(now=now + 100_000)
     assert updated is not None
     assert updated.next_attempt_at > now
+    # A send failure reschedules without incrementing attempts; the cached path
+    # already counted one attempt when it was stored.
+    assert updated.attempts == 1
 
 
-async def test_probe_exception_logged_and_record_rearmed(store: QueueStore) -> None:
-    """A probe exception leaves the record pending and rescheduled."""
+async def test_probe_exception_records_one_attempt_and_rearms(
+    store: QueueStore, tmp_path: Path
+) -> None:
+    """A probe exception records one attempt, reschedules, and stays pending.
+
+    This merges the old test_probe_exception_logged_and_record_rearmed and
+    test_mark_attempt_runs_before_probe_so_crash_safety_holds: both drove the
+    same raising-probe path, so one test now asserts every outcome.
+    """
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     store.enqueue(_entry(), now=now)
     record = _fetch(store, now)
@@ -505,17 +550,52 @@ async def test_probe_exception_logged_and_record_rearmed(store: QueueStore) -> N
     updated = store.next_due(now=now + 100_000)
     assert updated is not None
     assert updated.next_attempt_at > now
+    # Crash safety: the attempt was recorded before the probe ran.
+    assert updated.last_attempt_at == now
+    # Regression guard: one failing probe counts exactly one attempt.
+    assert updated.attempts == 1
 
 
-async def test_mark_attempt_runs_before_probe_so_crash_safety_holds(
-    store: QueueStore,
+async def test_two_not_ready_probes_increment_attempts_to_two(
+    store: QueueStore, tmp_path: Path
 ) -> None:
-    """The attempt is recorded once before the probe, even if the probe fails."""
+    """Two NOT_READY probes leave attempts at exactly two."""
     # Arrange
-    settings = _make_settings()
+    settings = _make_settings(tmp_path)
     now = 1000.0
     store.enqueue(_entry(), now=now)
+
+    # Act
+    for _ in range(2):
+        record = _fetch(store, 1e12)
+        await _process_record(
+            record,
+            settings,
+            store,
+            httpx2.AsyncClient(),
+            opts={},
+            probe=make_probe(ProbeState.NOT_READY, None),
+            send=CountingSend(),
+            sleep=_noop_sleep,
+            now=now,
+        )
+
+    # Assert
+    assert _read_row(tmp_path, "dQw4w9WgXcQ")["attempts"] == 2
+
+
+async def test_ready_probe_resets_rate_limit_streak(
+    store: QueueStore, tmp_path: Path
+) -> None:
+    """A READY probe resets the streak and counts one attempt."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    now = 1000.0
+    vtt = _write_vtt(tmp_path, "dQw4w9WgXcQ")
+    store.enqueue(_entry(), now=now)
+    store.reschedule("dQw4w9WgXcQ", rate_limit_streak=5)
     record = _fetch(store, now)
+    assert record.rate_limit_streak == 5
 
     # Act
     await _process_record(
@@ -524,17 +604,106 @@ async def test_mark_attempt_runs_before_probe_so_crash_safety_holds(
         store,
         httpx2.AsyncClient(),
         opts={},
-        probe=make_probe_raises(RuntimeError("boom")),
+        probe=make_probe(ProbeState.READY, str(vtt)),
         send=CountingSend(),
         sleep=_noop_sleep,
         now=now,
     )
 
     # Assert
-    updated = store.next_due(now=now + 100_000)
-    assert updated is not None
-    assert updated.last_attempt_at == now
-    assert updated.attempts == 1
+    row = _read_row(tmp_path, "dQw4w9WgXcQ")
+    assert row["rate_limit_streak"] == 0
+    assert row["attempts"] == 1
+    assert row["terminal_state"] == "DONE"
+
+
+async def test_consecutive_429s_count_toward_give_up(
+    store: QueueStore, tmp_path: Path
+) -> None:
+    """Eight consecutive 429s trip the budget; the streak drives it."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    now = 1000.0
+    store.enqueue(_entry(), now=now)
+
+    # Act: seven consecutive 429s keep the record pending.
+    for _ in range(7):
+        record = _fetch(store, 1e12)
+        await _process_record(
+            record,
+            settings,
+            store,
+            httpx2.AsyncClient(),
+            opts={},
+            probe=make_probe(ProbeState.RATE_LIMITED, None),
+            send=CountingSend(),
+            sleep=_noop_sleep,
+            now=now,
+        )
+
+    # Assert
+    assert store.counts() == {"pending": 1}
+    assert _read_row(tmp_path, "dQw4w9WgXcQ")["rate_limit_streak"] == 7
+
+    # Act: the eighth consecutive 429 trips the budget.
+    record = _fetch(store, 1e12)
+    await _process_record(
+        record,
+        settings,
+        store,
+        httpx2.AsyncClient(),
+        opts={},
+        probe=make_probe(ProbeState.RATE_LIMITED, None),
+        send=CountingSend(),
+        sleep=_noop_sleep,
+        now=now,
+    )
+
+    # Assert
+    assert store.counts() == {"pending": 0, "GIVE_UP_RATE_LIMITED_DEAD": 1}
+
+
+async def test_rate_limit_streak_resets_on_not_ready(
+    store: QueueStore, tmp_path: Path
+) -> None:
+    """A NOT_READY probe resets a non-zero rate-limit streak to zero."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    now = 1000.0
+    store.enqueue(_entry(), now=now)
+
+    # Act: three consecutive 429s build a streak of three.
+    for _ in range(3):
+        record = _fetch(store, 1e12)
+        await _process_record(
+            record,
+            settings,
+            store,
+            httpx2.AsyncClient(),
+            opts={},
+            probe=make_probe(ProbeState.RATE_LIMITED, None),
+            send=CountingSend(),
+            sleep=_noop_sleep,
+            now=now,
+        )
+    assert _read_row(tmp_path, "dQw4w9WgXcQ")["rate_limit_streak"] == 3
+
+    # Act: a NOT_READY probe means the rate limit is not the current problem.
+    record = _fetch(store, 1e12)
+    await _process_record(
+        record,
+        settings,
+        store,
+        httpx2.AsyncClient(),
+        opts={},
+        probe=make_probe(ProbeState.NOT_READY, None),
+        send=CountingSend(),
+        sleep=_noop_sleep,
+        now=now,
+    )
+
+    # Assert
+    assert _read_row(tmp_path, "dQw4w9WgXcQ")["rate_limit_streak"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +716,7 @@ async def test_loop_calls_pacing_sleep_between_records(
 ) -> None:
     """After each processed record the loop sleeps for the record pacing."""
     # Arrange
-    settings = _make_settings(transcript_dir=tmp_path / "transcripts")
+    settings = _make_settings(tmp_path)
     store.enqueue(_entry("a"))
     store.enqueue(_entry("b"))
     app = _make_app(settings, store)
@@ -573,7 +742,7 @@ async def test_loop_sleeps_long_when_queue_empty(
 ) -> None:
     """An empty queue sleeps for the long empty-queue interval."""
     # Arrange
-    settings = _make_settings(transcript_dir=tmp_path / "transcripts")
+    settings = _make_settings(tmp_path)
     app = _make_app(settings, store)
     delays: list[float] = []
     sleep = _make_counting_sleep(delays, cancel_after=2)
@@ -599,7 +768,7 @@ async def test_due_backlog_probed_serially_with_pacing(
     # Arrange
     pacing = 0.02
     monkeypatch.setattr(worker, "DEFAULT_RECORD_PACING", pacing)
-    settings = _make_settings(transcript_dir=tmp_path / "transcripts")
+    settings = _make_settings(tmp_path)
     for video_id in ("a", "b", "c"):
         store.enqueue(_entry(video_id))
     app = _make_app(settings, store)

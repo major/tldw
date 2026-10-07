@@ -140,6 +140,7 @@ def test_enqueue_persists_all_fields(tmp_path: Path) -> None:
     assert record.transcript_path is None
     assert record.terminal_state is None
     assert record.detail is None
+    assert record.rate_limit_streak == 0
     store.close()
 
 
@@ -329,6 +330,117 @@ def test_mark_attempt_preserves_transcript_path_when_not_provided(
     # Assert
     assert record is not None
     assert record.transcript_path == "/tmp/abc123.vtt"
+    store.close()
+
+
+def test_reschedule_updates_next_attempt_at_without_incrementing_attempts(
+    tmp_path: Path,
+) -> None:
+    """reschedule changes the schedule but leaves attempts alone."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.mark_attempt("dQw4w9WgXcQ", now=110.0)
+    store.mark_attempt("dQw4w9WgXcQ", now=120.0)
+
+    # Act
+    store.reschedule("dQw4w9WgXcQ", next_attempt_at=999.0)
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.attempts == 2
+    assert record.next_attempt_at == 999.0
+    store.close()
+
+
+def test_reschedule_updates_transcript_path_without_incrementing_attempts(
+    tmp_path: Path,
+) -> None:
+    """reschedule stores a transcript path without touching attempts."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.mark_attempt("dQw4w9WgXcQ", now=110.0)
+
+    # Act
+    store.reschedule("dQw4w9WgXcQ", transcript_path="/tmp/abc123.vtt")
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.attempts == 1
+    assert record.transcript_path == "/tmp/abc123.vtt"
+    store.close()
+
+
+def test_reschedule_updates_rate_limit_streak(tmp_path: Path) -> None:
+    """reschedule bumps the streak without touching attempts."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.reschedule("dQw4w9WgXcQ", rate_limit_streak=3)
+
+    # Act
+    store.reschedule("dQw4w9WgXcQ", rate_limit_streak=4)
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.rate_limit_streak == 4
+    assert record.attempts == 0
+    store.close()
+
+
+def test_reschedule_partial_update_leaves_other_fields_unchanged(
+    tmp_path: Path,
+) -> None:
+    """A reschedule that names one column leaves the others as they were."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.reschedule(
+        "dQw4w9WgXcQ",
+        next_attempt_at=200.0,
+        transcript_path="/tmp/a.vtt",
+        rate_limit_streak=2,
+    )
+
+    # Act
+    store.reschedule("dQw4w9WgXcQ", next_attempt_at=300.0)
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.next_attempt_at == 300.0
+    assert record.transcript_path == "/tmp/a.vtt"
+    assert record.rate_limit_streak == 2
+    store.close()
+
+
+def test_reschedule_with_no_args_is_a_noop(tmp_path: Path) -> None:
+    """A reschedule with no arguments changes nothing at all."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.reschedule(
+        "dQw4w9WgXcQ",
+        next_attempt_at=200.0,
+        transcript_path="/tmp/a.vtt",
+        rate_limit_streak=2,
+    )
+
+    # Act
+    store.reschedule("dQw4w9WgXcQ")
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.next_attempt_at == 200.0
+    assert record.transcript_path == "/tmp/a.vtt"
+    assert record.rate_limit_streak == 2
+    assert record.attempts == 0
+    assert record.last_attempt_at is None
     store.close()
 
 

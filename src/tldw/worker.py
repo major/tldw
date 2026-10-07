@@ -35,21 +35,27 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+import anthropic
 import httpx2
 from fastapi import FastAPI
+from pydantic import ValidationError
 
 from tldw.backoff import backoff_delay
 from tldw.config import Settings
-from tldw.discord import format_message
+from tldw.discord import build_takeaway_embeds, format_message
 from tldw.discord import send as discord_send
+from tldw.discord import send_embeds as discord_send_embeds
+from tldw.llm import OpencodeGoAnalyzer, TakeawayAnalyzer, Takeaways
 from tldw.queue import QueueRecord, QueueStore, TerminalState
 from tldw.transcript import (
+    Cue,
     ProbeResult,
     ProbeState,
     build_ydl_opts,
     first_lines,
     parse_srt_timed,
     parse_vtt_timed,
+    render_transcript_for_llm,
 )
 from tldw.transcript import probe_and_fetch as transcript_probe
 
@@ -74,6 +80,19 @@ DEFAULT_MAX_RATE_LIMIT_ATTEMPTS: int = 8
 SleepFn = Callable[[float], Awaitable[None]]
 ProbeFn = Callable[..., ProbeResult]
 SendFn = Callable[..., Awaitable[None]]
+SendEmbedsFn = Callable[..., Awaitable[None]]
+AnalyzeFn = Callable[[str, str, str], Awaitable[Takeaways]]
+"""Signature: (rendered_transcript, video_id, title) -> Takeaways."""
+
+
+def _default_analyze_factory(settings: Settings) -> AnalyzeFn:
+    """Build the production analyzer from settings. Returns a closure."""
+    analyzer: TakeawayAnalyzer = OpencodeGoAnalyzer(settings)
+
+    async def _analyze(rendered: str, video_id: str, title: str) -> Takeaways:
+        return await analyzer.analyze(rendered, video_id=video_id, title=title)
+
+    return _analyze
 
 
 async def transcript_loop(
@@ -83,6 +102,8 @@ async def transcript_loop(
     sleep: SleepFn = asyncio.sleep,
     probe: ProbeFn = transcript_probe,
     send: SendFn = discord_send,
+    send_embeds: SendEmbedsFn = discord_send_embeds,
+    analyze: AnalyzeFn | None = None,
 ) -> None:
     """Drain the queue forever, one record at a time, until cancelled.
 
@@ -93,11 +114,15 @@ async def transcript_loop(
 
     The default ``probe`` and ``send`` are the real modules; tests inject fakes
     through the keyword arguments. The default ``sleep`` is ``asyncio.sleep``.
+    ``analyze`` is resolved once from settings when not injected, so the LLM
+    seam can be faked in tests without touching the network.
     """
     settings: Settings = app.state.settings
     if not settings.discord_webhook_url:
         logger.info("transcript worker skipping: TLDW_DISCORD_WEBHOOK_URL is not set")
         return
+    if analyze is None:
+        analyze = _default_analyze_factory(settings)
     settings.transcript_dir.mkdir(parents=True, exist_ok=True)
     opts = build_ydl_opts(
         settings.transcript_dir,
@@ -127,6 +152,8 @@ async def transcript_loop(
                 opts=opts,
                 probe=probe,
                 send=send,
+                send_embeds=send_embeds,
+                analyze=analyze,
                 sleep=sleep,
             )
         except Exception:
@@ -158,6 +185,23 @@ def _digest_lines(path: Path, n: int) -> list[str]:
     return [cue.text for cue in cues[:n]]
 
 
+def _parse_cues_for_llm(path: Path) -> list[Cue]:
+    """Parse timed cues from a subtitle file for the LLM path.
+
+    Returns an empty list for an unknown extension or any parse error, which the
+    caller treats as "no LLM input" and falls back to the plain digest.
+    """
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+        if path.suffix == ".vtt":
+            return parse_vtt_timed(raw_text)
+        if path.suffix == ".srt":
+            return parse_srt_timed(raw_text)
+    except Exception:
+        logger.warning("timed parse failed for LLM path: %s", path)
+    return []
+
+
 async def _process_record(
     record: QueueRecord,
     settings: Settings,
@@ -169,14 +213,21 @@ async def _process_record(
     send: SendFn,
     sleep: SleepFn,
     now: float | None = None,
+    send_embeds: SendEmbedsFn = discord_send_embeds,
+    analyze: AnalyzeFn | None = None,
 ) -> None:
-    """Process one queue record: probe (if needed), parse, send, mark.
+    """Process one queue record: probe (if needed), analyze, send, mark.
 
     ``attempts`` is incremented exactly once per probe, by the pre-probe
     ``mark_attempt`` call. Every later update goes through ``reschedule`` so a
     single probe never counts as two attempts. The rate-limit streak is bumped
     only on a RATE_LIMITED outcome and reset to zero on any other outcome,
     which is what makes the give-up budget mean "consecutive 429s".
+
+    When ``opencode_api_key`` is set the happy path runs the LLM analyzer and
+    posts takeaway embeds. A missing key, an empty transcript, or an LLM
+    failure falls back to the plain text digest. An LLM failure is not a probe,
+    so it never bumps ``attempts``.
 
     ``now`` is the clock seam for tests and defaults to ``time.time()``.
     ``sleep`` is accepted for symmetry with the other seams and so future
@@ -283,13 +334,63 @@ async def _process_record(
         logger.warning("record %s has no transcript path to send", record.video_id)
         return
 
-    # Read the subtitle file, parse the cues first, slice, format, send. Parsing
-    # before slicing keeps VTT headers and cue timing lines out of the digest.
-    try:
-        path = Path(record_path)
+    path = Path(record_path)
+
+    async def _send_plain(detail: str | None) -> None:
+        """Send the plain text digest and mark the record DONE."""
         lines = _digest_lines(path, settings.transcript_lines)
         message = format_message(record.title, record.channel_name, record.url, lines)
         await send(client, settings.discord_webhook_url, message)
+        store.mark_terminal(record.video_id, TerminalState.DONE, detail=detail)
+
+    # Try the LLM takeaway path when configured, then fall back to the plain
+    # digest for a missing key, an empty transcript, or any LLM failure.
+    try:
+        if settings.opencode_api_key:
+            rendered = render_transcript_for_llm(_parse_cues_for_llm(path))
+            if not rendered.strip():
+                # No usable cues: skipping the LLM is not a failure, so the
+                # record keeps the plain digest's no-detail marker.
+                logger.info(
+                    "no LLM transcript for %s, falling back to plain digest",
+                    record.video_id,
+                )
+                await _send_plain(detail=None)
+                return
+            resolved_analyze = analyze or _default_analyze_factory(settings)
+            try:
+                takeaways = await resolved_analyze(
+                    rendered, record.video_id, record.title
+                )
+            except (
+                TimeoutError,
+                ValidationError,
+                anthropic.APIError,
+                anthropic.APIConnectionError,
+            ) as exc:
+                # APIConnectionError is an APIError subclass; listing both is
+                # explicit about the failures we expect from the gateway.
+                logger.warning(
+                    "LLM analysis failed for %s, falling back to plain digest: %s",
+                    record.video_id,
+                    exc,
+                )
+                await _send_plain(detail="llm_fallback")
+                return
+            embeds = build_takeaway_embeds(
+                takeaways,
+                video_id=record.video_id,
+                video_url=record.url,
+                channel_name=record.channel_name,
+            )
+            await send_embeds(client, settings.discord_webhook_url, embeds)
+            store.mark_terminal(
+                record.video_id,
+                TerminalState.DONE,
+                detail="llm_embeds",
+            )
+            return
+        await _send_plain(detail=None)
     except Exception:
         logger.exception("send raised for %s", record.video_id)
         delay = backoff_delay(
@@ -302,6 +403,3 @@ async def _process_record(
         # cached transcript_path means the retry will not re-probe YouTube.
         store.reschedule(record.video_id, next_attempt_at=now + delay)
         return
-
-    # Success.
-    store.mark_terminal(record.video_id, TerminalState.DONE)

@@ -1,20 +1,17 @@
 """Discord webhook sender for the transcript worker.
 
-After the worker fetches a video's subtitles it posts a short digest to a
-Discord channel: the title, the channel, the watch URL, and the first few
-transcript lines. This module owns the formatting, the chunking, and the POST.
+This module has two rendering modes. The regular digest path sends plain
+``{"content": "..."}`` text: the title, the channel, the watch URL, and the
+first few transcript lines. The LLM-takeaway path sends embeds instead, one per
+takeaway, with timestamped deep-link bullets. Plain text has a 2000 character
+cap, so digests are chunked; embeds have their own per-description and
+per-message caps, which the embed builders respect.
 
-Messages are plain ``{"content": "..."}`` text, not embeds. Plain text is the
-whole feature here, and embeds bring their own shape limits and rendering
-quirks for no benefit. Discord caps a message at 2000 characters, so longer
-digests are split on newline boundaries where possible and hard-sliced only
-when a single line is itself longer than the cap.
-
-The retry policy is deliberately small. A 429 is answered with one retry after
-the ``Retry-After`` header (or a default when the header is missing), and any
-other failure raises immediately. Bounded retries keep a Discord outage from
-turning into an infinite loop inside one send; the worker handles longer
-outages through its own backoff and queue schedule.
+Both paths share one retry policy. A 429 is answered with one retry after the
+``Retry-After`` header (or a default when the header is missing), and any other
+failure raises immediately. Bounded retries keep a Discord outage from turning
+into an infinite loop inside one send; the worker handles longer outages through
+its own backoff and queue schedule.
 """
 
 from __future__ import annotations
@@ -22,13 +19,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from typing import Any
 
 import httpx2
+
+from tldw.llm import Takeaway, TakeawayBullet, Takeaways
+from tldw.youtube import format_timestamp, youtube_deep_link
 
 __all__ = [
     "format_message",
     "chunk_message",
     "send",
+    "send_embeds",
+    "build_takeaway_embed",
+    "build_takeaway_embeds",
 ]
 
 logger = logging.getLogger(__name__)
@@ -125,6 +129,36 @@ def _retry_after_seconds(response: httpx2.Response) -> float:
         return DEFAULT_RETRY_AFTER_SECONDS
 
 
+async def _post_payload(
+    client: httpx2.AsyncClient,
+    url: str,
+    payload: dict[str, Any],
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """POST a JSON payload to a Discord webhook with one retry on 429.
+
+    Honors the Retry-After header on 429 (seconds). All other non-2xx responses
+    raise. Caller is responsible for payload size and shape.
+    """
+    attempts = 0
+    while True:
+        attempts += 1
+        response = await client.post(url, json=payload)
+        try:
+            response.raise_for_status()
+        except httpx2.HTTPStatusError as exc:
+            if exc.response.status_code == 429 and attempts == 1:
+                retry_after = _retry_after_seconds(exc.response)
+                logger.warning(
+                    "discord rate limited; retrying in %s seconds", retry_after
+                )
+                await sleep(retry_after)
+                continue
+            raise
+        return
+
+
 async def send(
     client: httpx2.AsyncClient,
     webhook_url: str,
@@ -147,22 +181,84 @@ async def send(
 
     url = webhook_url + DEFAULT_WEBHOOK_QUERY
     for index, chunk in enumerate(chunks):
-        attempts = 0
-        while True:
-            attempts += 1
-            response = await client.post(url, json={"content": chunk})
-            try:
-                response.raise_for_status()
-            except httpx2.HTTPStatusError as exc:
-                if exc.response.status_code == 429 and attempts == 1:
-                    retry_after = _retry_after_seconds(exc.response)
-                    logger.warning(
-                        "discord rate limited on chunk %d; retrying in %s seconds",
-                        index,
-                        retry_after,
-                    )
-                    await sleep(retry_after)
-                    continue
-                raise
-            logger.debug("posted discord chunk %d (%d chars)", index, len(chunk))
-            break
+        await _post_payload(client, url, {"content": chunk}, sleep=sleep)
+        logger.debug("posted discord chunk %d (%d chars)", index, len(chunk))
+
+
+def _format_bullet(bullet: TakeawayBullet, video_id: str) -> str:
+    """Render one bullet as '- [m:ss](deep-link) text' for Discord markdown."""
+    ts = format_timestamp(bullet.timestamp_seconds)
+    link = youtube_deep_link(video_id, bullet.timestamp_seconds)
+    return f"- [{ts}]({link}) {bullet.text}"
+
+
+def build_takeaway_embed(
+    takeaway: Takeaway,
+    *,
+    video_id: str,
+    video_url: str,
+    channel_name: str,
+    index: int,
+    total: int = 3,
+    color: int = 0x5865F2,
+) -> dict[str, Any]:
+    """Build a single Discord embed dict for one takeaway.
+
+    Discord limits: 4096 chars per description, 6000 chars total per message
+    (across all embeds), 10 embeds max. This builder truncates the description
+    with an ellipsis if it would exceed 4096 chars. The caller is responsible
+    for keeping the total across all embeds under 6000.
+    """
+    bullets_md = "\n".join(_format_bullet(b, video_id) for b in takeaway.bullets)
+    description = f"{takeaway.summary}\n\n{bullets_md}" if bullets_md else takeaway.summary
+    if len(description) > 4096:
+        description = description[:4093] + "..."
+    return {
+        "title": takeaway.title,
+        "url": video_url,
+        "description": description,
+        "color": color,
+        "footer": {"text": f"Takeaway {index} of {total} · {channel_name}"},
+    }
+
+
+def build_takeaway_embeds(
+    takeaways: Takeaways,
+    *,
+    video_id: str,
+    video_url: str,
+    channel_name: str,
+) -> list[dict[str, Any]]:
+    """Build all 3 takeaway embeds for a video."""
+    total = len(takeaways.items)
+    return [
+        build_takeaway_embed(
+            t,
+            video_id=video_id,
+            video_url=video_url,
+            channel_name=channel_name,
+            index=i + 1,
+            total=total,
+        )
+        for i, t in enumerate(takeaways.items)
+    ]
+
+
+async def send_embeds(
+    client: httpx2.AsyncClient,
+    webhook_url: str,
+    embeds: list[dict[str, Any]],
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Post embeds to a Discord webhook. Atomic single call.
+
+    Discord returns HTTP 400 for >10 embeds or >6000 total chars; the builder
+    is responsible for staying under the limits. This function just posts via
+    the shared _post_payload helper (same 429-retry semantics as send()).
+    """
+    if not embeds:
+        raise ValueError("send_embeds requires at least one embed")
+    await _post_payload(
+        client, webhook_url + DEFAULT_WEBHOOK_QUERY, {"embeds": embeds}, sleep=sleep
+    )

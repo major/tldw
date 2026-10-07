@@ -48,6 +48,9 @@ addopts = [
     "--allow-unix-socket",
 ]
 asyncio_mode = "auto"
+markers = [
+    "live: marks tests as hitting the real opencode go gateway (run with: uv run pytest -m live --force-enable-socket)",
+]
 
 [tool.coverage.run]
 branch = true

@@ -1,0 +1,40 @@
+1
+00:00:01,000 --> 00:00:04,000
+Hello and welcome to the show.
+
+2
+00:00:04,500 --> 00:00:08,000
+Today we're talking about Postgres 18 and its new features.
+
+3
+00:00:08,000 --> 00:00:12,000
+Let's start with vacuum improvements.
+Let's start with vacuum improvements.
+
+4
+00:00:12,000 --> 00:00:16,000
+Autovacuum now uses a smarter cost model.
+
+5
+00:00:16,000 --> 00:00:21,000
+Indexing got faster with skip scan.
+
+6
+00:00:21,000 --> 00:00:27,000
+B-tree deduplication reduces bloat.
+
+7
+00:00:27,000 --> 00:00:33,000
+Logical replication supports failover slots.
+
+8
+00:00:33,000 --> 00:00:40,000
+The planner estimates are more accurate now.
+
+9
+00:00:40,000 --> 00:00:50,000
+Let's compare benchmarks on a real workload.
+
+10
+00:00:56,000 --> 00:01:00,000
+That wraps up our tour of the new release.

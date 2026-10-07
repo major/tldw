@@ -38,11 +38,6 @@ COPY --from=builder --chown=65532:0 /opt/app-root/src/channels.json /opt/app-roo
 
 ENV PATH="/opt/app-root/src/.venv/bin:${PATH}"
 
-# Create the persistent data directory so the non-root user can write to it
-# even before a volume is mounted. A named volume inherits this ownership the
-# first time it is created.
-RUN mkdir -p /data && chown 65532:0 /data
-
 EXPOSE 8000
 
 USER 65532:0

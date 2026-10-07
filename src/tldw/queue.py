@@ -181,13 +181,9 @@ class QueueStore:
             transcript_path=row["transcript_path"],
             terminal_state=terminal_state,
             detail=row["detail"],
-            # Defensive: a row read before the column migration ran has no
-            # rate_limit_streak, so treat a missing column as a zero streak.
-            rate_limit_streak=(
-                row["rate_limit_streak"]
-                if "rate_limit_streak" in row.keys()
-                else 0
-            ),
+            # The column always exists: __init__ creates the table with it and
+            # migrates older databases before any row is read.
+            rate_limit_streak=int(row["rate_limit_streak"]),
         )
 
     def enqueue(self, entry: VideoEntry, *, now: float | None = None) -> bool:

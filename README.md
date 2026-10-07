@@ -44,7 +44,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_CHANNELS_FILE` | No | `channels.json` | Path to the JSON channel list |
 | `TLDW_CHANNEL_IDS` | No | unset | CSV override for the channel list |
 | `TLDW_HUB_SECRET` | No | unset | HMAC secret for signing deliveries. When set, every incoming notification must carry a matching `X-Hub-Signature: sha1=...` header |
-| `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Webhook URL for the transcript-to-Discord delivery. When unset, transcripts are still queued and downloaded but not sent |
+| `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Webhook URL for transcript-to-Discord delivery. When unset, the transcript worker does not run; videos are enqueued but nothing is downloaded or sent |
 | `TLDW_QUEUE_FILE` | No | `queue.sqlite3` | Path to the SQLite queue database. Persist this directory in container deployments |
 | `TLDW_TRANSCRIPT_DIR` | No | `transcripts` | Directory where downloaded `.vtt` files are kept |
 | `TLDW_TRANSCRIPT_LINES` | No | `10` | How many transcript lines to include in each Discord message |

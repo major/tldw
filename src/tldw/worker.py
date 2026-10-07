@@ -57,7 +57,8 @@ DEFAULT_EMPTY_QUEUE_SLEEP: float = 60.0
 # the secondary pacing for a full backlog.
 DEFAULT_RECORD_PACING: float = 5.0
 # After this many consecutive RATE_LIMITED results for one record, give up
-# rather than drain the rate-limit budget. 8 * 5m baseline = ~40m at minimum.
+# rather than drain the rate-limit budget. With backoff base 300s and cap
+# 3600s, seven waits total roughly 4 hours before the eighth 429 trips.
 DEFAULT_MAX_RATE_LIMIT_ATTEMPTS: int = 8
 
 # Type aliases for the injectable seams. The probe and send signatures are left

@@ -4,6 +4,12 @@ services:
     build:
       context: .
       dockerfile: Containerfile
+      # Defaults come from the Makefile so `podman compose up` picks them up
+      # without an extra `--build-arg` on the command line. CI passes the same
+      # values explicitly through `docker/build-push-action`.
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     ports:
       - "8000:8000"
     env_file:

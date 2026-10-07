@@ -15,7 +15,15 @@ RUN python3 -m pip install --no-cache-dir uv==0.12.18 \
 FROM registry.access.redhat.com/hi/python:3.14@sha256:9ad2603a9f39caba3ac4101788fcceb2d63569fd1f448821bacba7c922b8b144
 
 ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
+LABEL org.opencontainers.image.created="${BUILD_TIME}"
+
+# Expose the build identity to the running process so the startup banner and
+# the /version endpoint can report which commit and build is live. Operators
+# pass these with --build-arg from their CI/CD system.
+ENV TLDW_GIT_SHA=${GIT_SHA} \
+    TLDW_BUILD_TIME=${BUILD_TIME}
 
 WORKDIR /opt/app-root/src
 

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tldw
+  labels:
+    app: tldw
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tldw
+  template:
+    metadata:
+      labels:
+        app: tldw
+      # Surface the running build with `kubectl get pods -L git-sha`. Update
+      # these labels from your CI/CD when you cut a new release.
+      annotations:
+        tldw.mhtx.net/git-sha: "{{ .git_sha }}"
+        tldw.mhtx.net/build-time: "{{ .build_time }}"
+    spec:
+      containers:
+        - name: tldw
+          image: ghcr.io/example/tldw:{{ .image_tag }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            # The Containerfile already sets these from build args, but
+            # overriding them here makes the values visible in
+            # `kubectl describe pod` and `kubectl get pod -o yaml` without
+            # having to pull the image manifest.
+            - name: TLDW_GIT_SHA
+              value: "{{ .git_sha }}"
+            - name: TLDW_BUILD_TIME
+              value: "{{ .build_time }}"
+          readinessProbe:
+            httpGet:
+              path: /version
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /version
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30

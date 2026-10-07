@@ -25,7 +25,7 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
     && rm /tmp/deno.zip \
     && /usr/local/bin/deno --version
 
-FROM registry.access.redhat.com/hi/python:3.14@sha256:9ad2603a9f39caba3ac4101788fcceb2d63569fd1f448821bacba7c922b8b144
+FROM registry.access.redhat.com/hi/python:3.14@sha256:9e5c94e0f676b2be9bf623fc1292b601358af588d4653eb547b4c7ae4295bae8
 
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown

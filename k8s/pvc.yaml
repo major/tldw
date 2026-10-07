@@ -1,0 +1,18 @@
+# PersistentVolumeClaim for the tldw queue and transcript files.
+#
+# Both TLDW_QUEUE_FILE and TLDW_TRANSCRIPT_DIR live under /data, which the
+# deployment mounts from this claim. Do not replace it with an emptyDir: the
+# hub does not redeliver after a 200 response, so a lost queue means those
+# videos are silently dropped.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tldw-data
+  labels:
+    app: tldw
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

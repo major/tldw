@@ -98,6 +98,23 @@ The container publishes port `8000`. `TLDW_CALLBACK_URL` is still required for
 the app to issue subscriptions. Put it (and any other `TLDW_*` overrides) in a
 local `.env` file and compose will load it for you. :lock:
 
+## Deployment
+
+Persistent storage is mandatory. `TLDW_QUEUE_FILE` (and its parent directory) and `TLDW_TRANSCRIPT_DIR` must live on storage that survives a reschedule: a named volume in compose, a PersistentVolumeClaim in Kubernetes. An `emptyDir` or a container-local path loses the queue, and because the PubSubHubbub hub does not redeliver after a 200 response, that means those videos are silently dropped.
+
+Keep the replica count at exactly one. The worker drains the queue serially, and that serial design is the rate-limit defense for YouTube: a second pod would double-probe the same videos. SQLite over a network filesystem is also unsafe. Scale CPU and memory, not replicas.
+
+Supply `TLDW_DISCORD_WEBHOOK_URL` from a Secret in production, not a plain environment variable, so the webhook URL is not exposed in the pod spec or container logs.
+
+The deployment artifacts:
+
+| File | Purpose |
+| --- | --- |
+| `.env.example` | Complete list of `TLDW_*` variables with comments. Copy to `.env`. |
+| `compose.yml` | Single service plus the `tldw-data` named volume mounted at `/data`. |
+| `k8s/deployment.yaml` | Deployment with the transcript env vars and the `/data` volume mount. |
+| `k8s/pvc.yaml` | PersistentVolumeClaim named `tldw-data` for the queue and transcripts. |
+
 ## Tunnel for local development :globe_with_meridians:
 
 The Google hub needs a public URL it can reach. Localhost is not enough. Pick one:
@@ -204,7 +221,6 @@ channels.json       # default channel list
 What `tldw` does not do (yet):
 
 - Persist lease state across restarts (in-memory only).
-- Act on notifications beyond printing them.
 - A polling fallback for missed pushes. The Google hub can occasionally drop deliveries; if that bites you, poll the RSS feed in a separate process.
 - Production hardening: no metrics, no health endpoint, no secrets manager, no deploy story.
 - Docker image, systemd unit, or any other packaging. Run `uv run tldw` under your favorite supervisor.

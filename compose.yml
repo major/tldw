@@ -1,3 +1,7 @@
+# The tldw-data volume holds the SQLite queue and the downloaded .vtt files.
+# This MUST be persistent (named volume or host bind). An emptyDir loses
+# data on reschedule, and because the PubSubHubbub hub does not redeliver
+# after a 200 response, queue loss means silently dropped videos.
 services:
   tldw:
     container_name: tldw
@@ -15,4 +19,18 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      TLDW_QUEUE_FILE: ${TLDW_QUEUE_FILE:-/data/queue.sqlite3}
+      TLDW_TRANSCRIPT_DIR: ${TLDW_TRANSCRIPT_DIR:-/data/transcripts}
+      TLDW_DISCORD_WEBHOOK_URL: ${TLDW_DISCORD_WEBHOOK_URL:-}
+      TLDW_POLL_BASE_SECONDS: ${TLDW_POLL_BASE_SECONDS:-600}
+      TLDW_POLL_CAP_SECONDS: ${TLDW_POLL_CAP_SECONDS:-3600}
+      TLDW_GIVEUP_SECONDS: ${TLDW_GIVEUP_SECONDS:-172800}
+      TLDW_TRANSCRIPT_LINES: ${TLDW_TRANSCRIPT_LINES:-10}
+      TLDW_TRANSCRIPT_LANGS: ${TLDW_TRANSCRIPT_LANGS:-["en","en-orig"]}
+    volumes:
+      - tldw-data:/data
     restart: unless-stopped
+
+volumes:
+  tldw-data:

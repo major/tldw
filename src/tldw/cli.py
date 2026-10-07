@@ -9,6 +9,8 @@ the renewal loop, so the CLI only has to get uvicorn running.
 from __future__ import annotations
 
 import logging
+import time
+from typing import Any
 
 import uvicorn
 
@@ -33,6 +35,91 @@ _PROBE_PATH = "/version"
 # ever drops the surrounding quotes, and still distinguishes '/version' from
 # a hypothetical '/versions' endpoint.
 _PROBE_MARKER = f"{_PROBE_PATH} HTTP/"
+
+# Log line format shared by tldw and uvicorn output. ``asctime`` is rendered
+# as ISO 8601 in UTC by ``_UtcFormatter`` below. Keeping the format identical
+# for both streams means ``kubectl logs`` and any downstream log shipper see
+# a single line shape regardless of which component emitted the line.
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+_LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S+00:00"
+
+
+class _UtcFormatter(logging.Formatter):
+    """Render ``asctime`` in UTC so log lines agree across machines and zones.
+
+    Python's default ``Formatter.formatTime`` uses ``time.localtime``, which
+    produces host-local timestamps. Container logs from a pod running in a
+    different zone than the operator would otherwise disagree on the wall
+    clock, so we pin the converter to ``time.gmtime`` and use a literal
+    ``+00:00`` in the date format. Operators who want a different zone can
+    replace the converter without touching the format string.
+    """
+
+    converter = time.gmtime
+
+
+def _configure_root_logging() -> None:
+    """Install a UTC-timestamped stream handler on the root logger.
+
+    Every ``logging.getLogger(__name__)`` in the project propagates to the
+    root, so this is the single point where the on-disk log line shape is
+    defined. The function is idempotent: if a handler whose formatter is
+    already ``_UtcFormatter`` is attached, the call is a no-op. Pre-existing
+    handlers (for example pytest's ``LogCaptureHandler`` during the test
+    suite) are left in place so log capture keeps working.
+    """
+    root = logging.getLogger()
+    for existing in root.handlers:
+        if isinstance(existing.formatter, _UtcFormatter):
+            return
+    handler = logging.StreamHandler()
+    handler.setFormatter(_UtcFormatter(fmt=_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+    root.addHandler(handler)
+    # ``NOTSET`` is the sentinel for "fall through to whatever the parent
+    # chain says". If a real level has already been set (for example by a
+    # deployment that wired in a quieter default), leave it alone.
+    if root.level == logging.NOTSET:
+        root.setLevel(logging.INFO)
+
+
+# Uvicorn's default ``log_config`` renders the log line without a timestamp
+# and uses formatters that strip ``asctime`` even when it is in the format
+# string. Passing our own config gives every uvicorn logger the same UTC
+# line shape the rest of the app uses, and pins the access log to stdout
+# so ``kubectl logs`` can split error and access streams by convention.
+_LOG_CONFIG: dict[str, Any] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "()": _UtcFormatter,
+            "fmt": _LOG_FORMAT,
+            "datefmt": _LOG_DATEFMT,
+        },
+        "access": {
+            "()": _UtcFormatter,
+            "fmt": _LOG_FORMAT,
+            "datefmt": _LOG_DATEFMT,
+        },
+    },
+    "handlers": {
+        "default": {
+            "formatter": "default",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
+        },
+        "access": {
+            "formatter": "access",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        "uvicorn.error": {"level": "INFO"},
+        "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+    },
+}
 
 
 class _SuppressAccessPath(logging.Filter):
@@ -74,6 +161,10 @@ def main() -> None:
     When TLDW_CALLBACK_URL is unset the app still starts, but no subscriptions
     are issued, so a warning names the variable an operator must set.
     """
+    # Configure logging first so the banner and the callback warning land
+    # on a stream that already has a timestamp. The same config is passed
+    # to uvicorn below so its loggers render the same way.
+    _configure_root_logging()
     # Emit the build identity before anything else so a slow startup (such as
     # waiting on the hub) does not push the banner past other log lines.
     _version.log_banner(logger)
@@ -85,4 +176,4 @@ def main() -> None:
         )
     app = create_app(settings)
     _silence_probe_access_log()
-    uvicorn.run(app, host="0.0.0.0", port=_DEFAULT_PORT)
+    uvicorn.run(app, host="0.0.0.0", port=_DEFAULT_PORT, log_config=_LOG_CONFIG)

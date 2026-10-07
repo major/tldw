@@ -34,7 +34,11 @@ def test_main_calls_uvicorn_run_with_default_port(
 ) -> None:
     """main() runs uvicorn on 0.0.0.0:8000 with the built FastAPI app."""
     # Arrange
-    expected_kwargs = {"host": "0.0.0.0", "port": 8000}
+    expected_kwargs = {
+        "host": "0.0.0.0",
+        "port": 8000,
+        "log_config": tldw_cli._LOG_CONFIG,
+    }
 
     # Act
     tldw_cli.main()

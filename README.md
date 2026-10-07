@@ -44,8 +44,25 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_CHANNELS_FILE` | No | `channels.json` | Path to the JSON channel list |
 | `TLDW_CHANNEL_IDS` | No | unset | CSV override for the channel list |
 | `TLDW_HUB_SECRET` | No | unset | HMAC secret for signing deliveries. When set, every incoming notification must carry a matching `X-Hub-Signature: sha1=...` header |
+| `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Webhook URL for the transcript-to-Discord delivery. When unset, transcripts are still queued and downloaded but not sent |
+| `TLDW_QUEUE_FILE` | No | `queue.sqlite3` | Path to the SQLite queue database. Persist this directory in container deployments |
+| `TLDW_TRANSCRIPT_DIR` | No | `transcripts` | Directory where downloaded `.vtt` files are kept |
+| `TLDW_TRANSCRIPT_LINES` | No | `10` | How many transcript lines to include in each Discord message |
+| `TLDW_POLL_BASE_SECONDS` | No | `600` | First retry delay in seconds |
+| `TLDW_POLL_CAP_SECONDS` | No | `3600` | Maximum retry delay in seconds |
+| `TLDW_GIVEUP_SECONDS` | No | `172800` | Stop retrying a video after this many seconds |
+| `TLDW_YTDLP_COOKIES_FILE` | No | unset | Optional path to a Netscape-format cookies file. Improves reliability when YouTube applies bot checks |
+| `TLDW_TRANSCRIPT_LANGS` | No | `["en", "en-orig"]` | Language codes to request from yt-dlp. Use exact codes only; a regex like `en.*` triggers 429s |
 
 The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
+
+### What happens when no webhook is configured
+
+When `TLDW_DISCORD_WEBHOOK_URL` is unset the worker still enqueues videos and downloads their transcripts to `TLDW_TRANSCRIPT_DIR`. Only the Discord send is skipped. Nothing is lost: the queue rows stay in the database, so an operator can set the webhook URL later and the pending transcripts are delivered on the next drain.
+
+### Persistent storage
+
+`TLDW_QUEUE_FILE` (and its parent directory) and `TLDW_TRANSCRIPT_DIR` must live on persistent storage: a named volume in compose, a PersistentVolumeClaim in Kubernetes. An `emptyDir` or a container-local path loses the queue when the pod is rescheduled. Because the PubSubHubbub hub does not redeliver a notification after a 200 response, a lost queue means those videos are silently dropped.
 
 ## Run :rocket:
 

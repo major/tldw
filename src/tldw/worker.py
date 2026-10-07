@@ -45,7 +45,7 @@ from tldw.config import Settings
 from tldw.discord import build_takeaway_embeds, format_message
 from tldw.discord import send as discord_send
 from tldw.discord import send_embeds as discord_send_embeds
-from tldw.llm import OpencodeGoAnalyzer, TakeawayAnalyzer, Takeaways
+from tldw.llm import OpencodeGoAnalyzer, TakeawayAnalyzer, Takeaways, snap_timestamps
 from tldw.queue import QueueRecord, QueueStore, TerminalState
 from tldw.transcript import (
     Cue,
@@ -347,7 +347,8 @@ async def _process_record(
     # digest for a missing key, an empty transcript, or any LLM failure.
     try:
         if settings.opencode_api_key:
-            rendered = render_transcript_for_llm(_parse_cues_for_llm(path))
+            cues = _parse_cues_for_llm(path)
+            rendered = render_transcript_for_llm(cues)
             if not rendered.strip():
                 # No usable cues: skipping the LLM is not a failure, so the
                 # record keeps the plain digest's no-detail marker.
@@ -377,6 +378,7 @@ async def _process_record(
                 )
                 await _send_plain(detail="llm_fallback")
                 return
+            takeaways = snap_timestamps(takeaways, cues)
             embeds = build_takeaway_embeds(
                 takeaways,
                 video_id=record.video_id,

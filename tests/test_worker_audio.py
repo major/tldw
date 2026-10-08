@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from helpers import (
     counting_sleep,
     make_settings,
+    make_takeaways,
     make_video_entry,
     never_sleep,
     noop_sleep,
@@ -55,25 +56,6 @@ def _make_app(settings: Settings, queue_store: QueueStore) -> FastAPI:
     app.state.settings = settings
     app.state.queue = queue_store
     return app
-
-
-def _takeaways() -> Takeaways:
-    """Build a valid three-item Takeaways model with no bullet timestamps.
-
-    The audio backend has no cues to snap to, so bullets carry no timestamps.
-    """
-    return Takeaways.model_validate(
-        {
-            "items": [
-                {
-                    "title": f"Takeaway {i}",
-                    "summary": f"Summary {i}",
-                    "bullets": [{"text": f"Bullet {i}"}],
-                }
-                for i in range(3)
-            ]
-        }
-    )
 
 
 def _fetch(queue_store: QueueStore, now: float) -> QueueRecord:
@@ -368,7 +350,7 @@ async def test_process_record_audio_happy_path_calls_every_stage_in_order(
     )
     compress = FakeCompress(creates=True, order=order)
     transcribe = FakeTranscribe(transcripts=["hello world"], order=order)
-    analyze = FakeAnalyze(result=_takeaways(), order=order)
+    analyze = FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}"), order=order)
     sender = CountingSend(order=order)
     embeds_sender = CountingSendEmbeds(order=order)
 
@@ -428,7 +410,7 @@ async def test_process_record_audio_skips_download_when_audio_path_cached(
         download=download,
         compress=compress,
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -479,7 +461,7 @@ async def test_process_record_audio_re_downloads_when_cached_audio_path_missing(
         download=download,
         compress=compress,
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -516,7 +498,7 @@ async def test_process_record_audio_skips_download_and_compress_when_transcript_
     )
     compress = FakeCompress()
     transcribe = FakeTranscribe()
-    analyze = FakeAnalyze(result=_takeaways())
+    analyze = FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}"))
 
     # Act
     await _run_audio(
@@ -570,7 +552,7 @@ async def test_process_record_audio_classifies_429_as_rate_limited_and_streaks(
         download=download,
         compress=FakeCompress(),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -609,7 +591,7 @@ async def test_process_record_audio_unavailable_marks_give_up(
         download=download,
         compress=FakeCompress(),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -641,7 +623,7 @@ async def test_process_record_audio_not_ready_reschedules_with_poll_backoff(
         download=download,
         compress=FakeCompress(),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -687,7 +669,7 @@ async def test_process_record_audio_compress_error_reschedules_with_300s_backoff
         download=download,
         compress=FakeCompress(raises=CompressError("ffmpeg exploded")),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -725,7 +707,7 @@ async def test_process_record_audio_compress_error_does_not_set_audio_path(
         download=download,
         compress=FakeCompress(raises=CompressError("ffmpeg exploded")),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -765,7 +747,7 @@ async def test_process_record_audio_4xx_api_error_marks_give_up_audio(
         download=download,
         compress=FakeCompress(creates=True),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -801,7 +783,7 @@ async def test_process_record_audio_429_api_error_reschedules_with_audio_path_pr
         download=download,
         compress=FakeCompress(creates=True),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -890,7 +872,7 @@ async def test_process_record_audio_writes_transcript_txt_and_persists_transcrip
         download=download,
         compress=FakeCompress(creates=True),
         transcribe=FakeTranscribe(transcripts=["hello world"]),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -927,7 +909,7 @@ async def test_process_record_audio_deletes_compressed_audio_after_transcription
         download=download,
         compress=compress,
         transcribe=FakeTranscribe(transcripts=["hello world"]),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -968,7 +950,7 @@ async def test_process_record_audio_48h_give_up_short_circuits_before_download(
         download=download,
         compress=FakeCompress(),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -1007,7 +989,7 @@ async def test_process_record_audio_uses_audio_settings_for_dest_dir_and_format(
         download=download,
         compress=compress,
         transcribe=FakeTranscribe(transcripts=["hello world"]),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -1078,7 +1060,7 @@ async def test_transcript_loop_respects_enqueue_delay(
             download_audio=download,
             compress_audio=FakeCompress(),
             transcribe=FakeTranscribe(),
-            analyze=FakeAnalyze(result=_takeaways()),
+            analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         )
 
     # Assert

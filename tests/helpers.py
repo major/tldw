@@ -16,6 +16,7 @@ import httpx2
 
 from tldw.config import Settings
 from tldw.feed import VideoEntry
+from tldw.llm import Takeaways
 
 
 def make_video_entry(
@@ -143,3 +144,55 @@ def counting_sleep(
             raise asyncio.CancelledError
 
     return sleep
+
+
+def make_takeaways(
+    item_count: int = 3,
+    bullet_count: int = 1,
+    *,
+    title_template: str = "Takeaway {i}",
+    summary_template: str | None = "Summary {i}",
+    bullet_text: str | None = "Bullet {i}-{n}",
+    bullet_times: list[list[int | None]] | None = None,
+) -> Takeaways:
+    """Build a valid ``Takeaways`` model for tests.
+
+    The defaults reproduce the three-item / one-bullet shape that the
+    worker pipeline tests use. To build the variants the LLM and embed
+    tests exercise, pass ``bullet_times=[[t1, t2, ...], ...]``
+    (per-item, per-bullet) for custom timestamps, or pass a custom
+    ``bullet_text`` template.
+
+    ``TakeawayBullet.text`` requires a non-empty string, so this factory
+    never emits ``text=None`` bullets. Callers that want the worker /
+    audio bullet text pass ``bullet_text="Bullet {i}"`` explicitly.
+    ``bullet_text=None`` falls back to the default ``Bullet {i}-{n}``
+    template.
+
+    For full control over the payload, callers can
+    ``Takeaways.model_validate`` directly -- this factory targets the
+    common case and the variants above.
+    """
+    resolved_bullet_text = (
+        "Bullet {i}-{n}" if bullet_text is None else bullet_text
+    )
+    items: list[dict[str, object]] = []
+    for i in range(item_count):
+        bullets: list[dict[str, object]] = []
+        for n in range(bullet_count):
+            bullet: dict[str, object] = {
+                "text": resolved_bullet_text.format(i=i, n=n)
+            }
+            if bullet_times is not None and i < len(bullet_times):
+                per_item = bullet_times[i]
+                if n < len(per_item):
+                    bullet["timestamp_seconds"] = per_item[n]
+            bullets.append(bullet)
+        item: dict[str, object] = {
+            "title": title_template.format(i=i),
+            "bullets": bullets,
+        }
+        if summary_template is not None:
+            item["summary"] = summary_template.format(i=i)
+        items.append(item)
+    return Takeaways.model_validate({"items": items})

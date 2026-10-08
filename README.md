@@ -60,6 +60,15 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_LLM_MAX_OUTPUT_TOKENS` | No | `2048` | Maximum tokens the takeaway model may generate |
 | `TLDW_LLM_MAX_INPUT_CHARS` | No | `300000` | Hard cap on transcript characters sent to the model. Longer transcripts are truncated with a warning |
 | `TLDW_TAKEAWAY_MAX_BULLETS` | No | `5` | Maximum bullets kept per takeaway |
+| `TLDW_TRANSCRIPT_BACKEND` | No | `audio` | Which fetch path to use. `audio` downloads the video's audio, compresses it with ffmpeg, and sends it to OpenAI for transcription (default; requires `TLDW_OPENAI_API_KEY`). `vtt` falls back to yt-dlp's subtitle download |
+| `TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS` | No | `300` | Delay before the first audio download. Debounces notifications and gives YouTube's pipeline time to finish producing the video |
+| `TLDW_AUDIO_DIR` | No | `audio` | Directory for raw audio downloads and compressed artifacts. May be ephemeral: the worker re-downloads on crash before the transcript is cached |
+| `TLDW_AUDIO_FORMAT` | No | `webm` | Output container for ffmpeg. Must be in OpenAI's accepted set: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, or `webm`. Use `webm` for the smallest files (Opus codec) |
+| `TLDW_AUDIO_BITRATE` | No | `32k` | Target bitrate for ffmpeg Opus encoding. `32k` is enough for speech and keeps a 1-hour video under 15 MB, well under OpenAI's 25 MB upload limit |
+| `TLDW_FFMPEG_TIMEOUT_SECONDS` | No | `900` | Per-call ffmpeg timeout, in seconds |
+| `TLDW_TRANSCRIBE_MODEL` | No | `gpt-transcribe` | OpenAI speech-to-text model. `gpt-transcribe` is the current recommended model; the `gpt-4o-transcribe` family is deprecated and shuts down 2027-02-26 |
+| `TLDW_TRANSCRIBE_LANGS` | No | `["en"]` | JSON list of ISO-639-1 language hints to pass to the transcription API |
+| `TLDW_TRANSCRIBE_TIMEOUT_SECONDS` | No | `600` | Per-call transcription timeout, in seconds |
 
 The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
 

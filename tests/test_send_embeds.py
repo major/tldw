@@ -52,6 +52,15 @@ def _sample_embeds() -> list[dict]:
     return [{"title": "T", "description": "D", "color": 0x5865F2}]
 
 
+def _three_sample_embeds() -> list[dict]:
+    """Return three minimal embed dicts with distinguishable titles."""
+    return [
+        {"title": "First", "description": "D1", "color": 0x5865F2},
+        {"title": "Second", "description": "D2", "color": 0x5865F2},
+        {"title": "Third", "description": "D3", "color": 0x5865F2},
+    ]
+
+
 async def _send_embeds_once(
     captured: list[httpx2.Request],
     responses: list[httpx2.Response],
@@ -73,26 +82,28 @@ async def _send_embeds_once(
 # ---------------------------------------------------------------------------
 
 
-async def test_send_embeds_posts_single_request_with_embeds_body() -> None:
-    """The happy path posts one request whose body holds the embeds."""
+async def test_send_embeds_posts_one_request_per_embed() -> None:
+    """The happy path posts one request per embed so each is a feed item."""
     captured: list[httpx2.Request] = []
-    embeds = _sample_embeds()
+    embeds = _three_sample_embeds()
 
     await _send_embeds_once(captured, [], embeds)
 
-    assert len(captured) == 1
-    body = json.loads(captured[0].content.decode("utf-8"))
-    assert body == {"embeds": embeds}
+    assert len(captured) == len(embeds)
+    for request, embed in zip(captured, embeds):
+        body = json.loads(request.content.decode("utf-8"))
+        assert body == {"embeds": [embed]}
 
 
 async def test_send_embeds_posts_to_webhook_url_with_wait_true() -> None:
-    """The request targets the webhook URL with ?wait=true appended."""
+    """Every request targets the webhook URL with ?wait=true appended."""
     captured: list[httpx2.Request] = []
 
-    await _send_embeds_once(captured, [], _sample_embeds())
+    await _send_embeds_once(captured, [], _three_sample_embeds())
 
-    assert len(captured) == 1
-    assert str(captured[0].url).endswith("?wait=true")
+    assert len(captured) == 3
+    for request in captured:
+        assert str(request.url).endswith("?wait=true")
 
 
 async def test_send_embeds_retries_once_on_429_with_retry_after() -> None:

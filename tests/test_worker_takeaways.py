@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -27,6 +26,7 @@ from helpers import (
     make_takeaways,
     make_video_entry,
     noop_sleep,
+    read_queue_row,
 )
 from tldw.audio import DownloadResult
 from tldw.config import Settings
@@ -66,20 +66,6 @@ def _fetch(queue_store: QueueStore, now: float) -> QueueRecord:
     record = queue_store.next_due(now=now)
     assert record is not None
     return record
-
-
-def _read_row(tmp_path: Path, video_id: str) -> sqlite3.Row:
-    """Read a videos row straight from the file, including terminal rows."""
-    conn = sqlite3.connect(str(tmp_path / "queue.sqlite3"))
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT * FROM videos WHERE video_id = ?", (video_id,)
-        ).fetchone()
-        assert row is not None
-        return row
-    finally:
-        conn.close()
 
 
 def _download_should_not_run(*args: object, **kwargs: object) -> DownloadResult:
@@ -215,7 +201,7 @@ async def test_llm_success_sends_embeds_and_marks_done(
     assert embeds_sender.calls == 1
     assert len(embeds_sender.embeds[0]) == 3
     assert sender.calls == 0
-    row = _read_row(tmp_path, _VIDEO_ID)
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
     assert row["detail"] == "llm_embeds"
 
@@ -256,7 +242,7 @@ async def test_no_api_key_skips_analysis_and_sends_plain(
     assert analyzer.calls == 0
     assert sender.calls == 1
     assert embeds_sender.calls == 0
-    row = _read_row(tmp_path, _VIDEO_ID)
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
     assert row["detail"] is None
 
@@ -293,7 +279,7 @@ async def test_empty_transcript_skips_analysis_and_sends_plain(
     assert analyzer.calls == 0
     assert sender.calls == 1
     assert embeds_sender.calls == 0
-    row = _read_row(tmp_path, _VIDEO_ID)
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
     assert row["detail"] == "empty_transcript"
 
@@ -366,7 +352,7 @@ async def test_llm_failure_falls_back_to_plain_digest(
     assert analyzer.calls == 1
     assert sender.calls == 1
     assert embeds_sender.calls == 0
-    row = _read_row(tmp_path, _VIDEO_ID)
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
     assert row["detail"] == "llm_fallback"
     # An LLM failure is not a probe, so attempts stays at the cached-path value.

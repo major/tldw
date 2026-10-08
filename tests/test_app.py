@@ -16,7 +16,6 @@ import hashlib
 import hmac as _hmac
 import json
 import logging
-import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -31,21 +30,13 @@ from helpers import (
     make_settings,
     make_video_entry,
     never_sleep,
+    read_titles,
 )
 from tldw import _version
 from tldw.app import _renewal_loop, create_app, renewal_delay
 from tldw.config import Settings
 from tldw.feed import VideoEntry
 from tldw.queue import TerminalState, open_store
-
-
-def _read_titles(queue_file: Path) -> set[str]:
-    """Read every queued title straight from the database file."""
-    conn = sqlite3.connect(str(queue_file))
-    try:
-        return {row[0] for row in conn.execute("SELECT title FROM videos")}
-    finally:
-        conn.close()
 
 
 @pytest.fixture
@@ -987,7 +978,7 @@ def test_notify_enqueues_entries_into_queue_store(
         assert store.counts() == {"pending": 2}
     finally:
         store.close()
-    assert _read_titles(settings.queue_file) == {
+    assert read_titles(settings.queue_file) == {
         "Fixture Video One",
         "Fixture Video Two",
     }
@@ -1329,7 +1320,7 @@ def test_notify_drops_shorts_by_default(
         assert counts == {"pending": 1}
     finally:
         store.close()
-    assert _read_titles(settings.queue_file) == {"Long Form Video"}
+    assert read_titles(settings.queue_file) == {"Long Form Video"}
 
 
 def test_notify_keeps_shorts_when_opted_in(

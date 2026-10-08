@@ -16,26 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from helpers import make_video_entry
+from helpers import make_video_entry, read_queue_row
 from tldw.queue import (
     QueueStore,
     TerminalState,
     open_store,
 )
-
-
-def _read_row(path: Path, video_id: str) -> sqlite3.Row:
-    """Read one videos row straight from the file for fields next_due hides."""
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT * FROM videos WHERE video_id = ?", (video_id,)
-        ).fetchone()
-        assert row is not None
-        return row
-    finally:
-        conn.close()
 
 
 def test_open_store_creates_db_file_when_missing(tmp_path: Path) -> None:
@@ -455,7 +441,7 @@ def test_mark_terminal_stores_detail(tmp_path: Path) -> None:
     store.mark_terminal("dQw4w9WgXcQ", TerminalState.DONE, detail="posted to discord")
     store.close()
     reopened = open_store(path)
-    row = _read_row(path, "dQw4w9WgXcQ")
+    row = read_queue_row(path, "dQw4w9WgXcQ")
 
     # Assert
     assert row["detail"] == "posted to discord"
@@ -532,7 +518,7 @@ def test_store_survives_reopen(tmp_path: Path) -> None:
     store.close()
     reopened = open_store(path)
     counts = reopened.counts()
-    row = _read_row(path, "done")
+    row = read_queue_row(path, "done")
 
     # Assert
     assert counts == {"pending": 1, "DONE": 1}
@@ -593,7 +579,7 @@ def test_enqueue_with_delay_pushes_next_attempt_at(tmp_path: Path) -> None:
     store.enqueue(make_video_entry(), now=100.0, delay_seconds=300.0)
     before = store.next_due(now=399.0)
     due = store.next_due(now=400.0)
-    row = _read_row(path, "dQw4w9WgXcQ")
+    row = read_queue_row(path, "dQw4w9WgXcQ")
 
     # Assert
     assert before is None
@@ -612,7 +598,7 @@ def test_enqueue_with_default_delay_is_immediate(tmp_path: Path) -> None:
     # Act
     store.enqueue(make_video_entry(), now=100.0)
     due = store.next_due(now=100.0)
-    row = _read_row(path, "dQw4w9WgXcQ")
+    row = read_queue_row(path, "dQw4w9WgXcQ")
 
     # Assert
     assert due is not None
@@ -632,7 +618,7 @@ def test_enqueue_duplicate_with_delay_preserves_original_schedule(
 
     # Act
     second = store.enqueue(make_video_entry(), now=200.0, delay_seconds=600.0)
-    row = _read_row(path, "dQw4w9WgXcQ")
+    row = read_queue_row(path, "dQw4w9WgXcQ")
 
     # Assert
     assert second is False
@@ -652,8 +638,8 @@ def test_enqueue_with_zero_delay_equivalent_to_default(tmp_path: Path) -> None:
     default_store.enqueue(make_video_entry(), now=200.0)
     explicit_due = explicit_store.next_due(now=100.0)
     default_due = default_store.next_due(now=200.0)
-    explicit_row = _read_row(tmp_path / "explicit.sqlite3", "dQw4w9WgXcQ")
-    default_row = _read_row(tmp_path / "default.sqlite3", "dQw4w9WgXcQ")
+    explicit_row = read_queue_row(tmp_path / "explicit.sqlite3", "dQw4w9WgXcQ")
+    default_row = read_queue_row(tmp_path / "default.sqlite3", "dQw4w9WgXcQ")
 
     # Assert
     assert explicit_due is not None

@@ -7,6 +7,7 @@ boundary between auto-injected fixtures and explicit helpers stays clear.
 
 from __future__ import annotations
 
+import sqlite3
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -196,3 +197,36 @@ def make_takeaways(
             item["summary"] = summary_template.format(i=i)
         items.append(item)
     return Takeaways.model_validate({"items": items})
+
+
+def read_queue_row(path: Path, video_id: str) -> sqlite3.Row:
+    """Read one videos row straight from the SQLite file.
+
+    Bypasses the ``QueueStore`` abstraction for the rare assertions that
+    need to see terminal-state fields ``next_due`` intentionally hides
+    (state, attempts, last_attempt_at, transcript_path, audio_path).
+    Asserts the row exists; callers can rely on the non-None return.
+    """
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM videos WHERE video_id = ?", (video_id,)
+        ).fetchone()
+        assert row is not None
+        return row
+    finally:
+        conn.close()
+
+
+def read_titles(queue_file: Path) -> set[str]:
+    """Read every queued title straight from the database file.
+
+    Used by the FastAPI tests to assert the rendered output after a
+    delivery without depending on the ``QueueStore`` API.
+    """
+    conn = sqlite3.connect(str(queue_file))
+    try:
+        return {row[0] for row in conn.execute("SELECT title FROM videos")}
+    finally:
+        conn.close()

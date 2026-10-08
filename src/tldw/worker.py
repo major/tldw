@@ -39,6 +39,7 @@ import anthropic
 import httpx2
 from fastapi import FastAPI
 from pydantic import ValidationError
+import pydantic_ai.exceptions
 
 from tldw.backoff import backoff_delay
 from tldw.config import Settings
@@ -368,6 +369,7 @@ async def _process_record(
                 ValidationError,
                 anthropic.APIError,
                 anthropic.APIConnectionError,
+                pydantic_ai.exceptions.UnexpectedModelBehavior,
             ) as exc:
                 # APIConnectionError is an APIError subclass; listing both is
                 # explicit about the failures we expect from the gateway.

@@ -17,6 +17,7 @@ from typing import Any
 
 import anthropic
 import httpx2
+import pydantic_ai.exceptions
 import pytest
 from pydantic import ValidationError
 
@@ -350,19 +351,27 @@ def _api_error() -> anthropic.APIError:
     return anthropic.APIError("boom", request=request, body=None)
 
 
+def _unexpected_model_behavior() -> pydantic_ai.exceptions.UnexpectedModelBehavior:
+    """Build a real UnexpectedModelBehavior without touching the network."""
+    return pydantic_ai.exceptions.UnexpectedModelBehavior(
+        "Model token limit (2048) exceeded before any response was generated."
+    )
+
+
 @pytest.mark.parametrize(
     "exc",
     [
         asyncio.TimeoutError(),
         _validation_error(),
         _api_error(),
+        _unexpected_model_behavior(),
     ],
-    ids=["timeout", "validation", "api_error"],
+    ids=["timeout", "validation", "api_error", "unexpected_model"],
 )
 async def test_llm_failure_falls_back_to_plain_digest(
     store: QueueStore, tmp_path: Path, exc: BaseException
 ) -> None:
-    """A timeout, validation error, or API error falls back without bumping attempts."""
+    """A timeout, validation, API, or unexpected-model error falls back without bumping attempts."""
     # Arrange
     settings = _make_settings(tmp_path)
     now = 1000.0

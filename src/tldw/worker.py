@@ -336,13 +336,39 @@ async def _process_record_audio(
             "using cached transcript: video=%s path=%s", record.video_id, txt_path
         )
     else:
+        # The compressed audio may already be cached on the row, but a stale
+        # path is possible: the audio file is best-effort-deleted after a
+        # successful transcribe, while the row's audio_path is only rewritten
+        # on a successful re-compress. If the LLM step failed downstream on
+        # a previous attempt, the path on disk and the path on the row can
+        # disagree, and a naive ``Path(record.audio_path)`` here would
+        # point transcribe at a vanished file. Verify the file is present
+        # before short-circuiting download+compress; otherwise clear the
+        # stale pointer and fall through to re-download.
+        compressed: Path | None = None
         if record.audio_path is not None:
-            # The compressed audio is cached; skip download and compress.
-            compressed = Path(record.audio_path)
-            logger.info(
-                "using cached audio: video=%s path=%s", record.video_id, compressed
-            )
-        else:
+            cached = Path(record.audio_path)
+            if cached.exists():
+                compressed = cached
+                logger.info(
+                    "using cached audio: video=%s path=%s",
+                    record.video_id,
+                    compressed,
+                )
+            else:
+                logger.warning(
+                    "cached audio_path missing, re-downloading: video=%s path=%s",
+                    record.video_id,
+                    cached,
+                )
+                try:
+                    store.clear_audio_path(record.video_id)
+                except Exception:
+                    logger.exception(
+                        "failed to clear stale audio_path for %s",
+                        record.video_id,
+                    )
+        if compressed is None:
             raw = await _download_stage(
                 record, settings, store, download_audio=download_audio, now=now
             )

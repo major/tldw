@@ -333,6 +333,24 @@ class QueueStore:
         )
         self._conn.commit()
 
+    def clear_audio_path(self, video_id: str) -> None:
+        """Null out a row's cached ``audio_path``.
+
+        The worker calls this when it discovers that the path stored on a
+        row no longer points at a file on disk (for example, the compressed
+        audio was best-effort-deleted after a successful transcribe on a
+        previous run, but the row kept the old path because the LLM step
+        failed). Without this, every retry would skip download+compress and
+        immediately fail transcribe on the missing file. The next successful
+        reschedule will write a fresh path on top.
+        """
+        self._ensure_open()
+        self._conn.execute(
+            "UPDATE videos SET audio_path = NULL WHERE video_id = ?",
+            (video_id,),
+        )
+        self._conn.commit()
+
     def mark_terminal(
         self,
         video_id: str,

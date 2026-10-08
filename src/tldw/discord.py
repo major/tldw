@@ -259,14 +259,25 @@ async def send_embeds(
     *,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
-    """Post embeds to a Discord webhook. Atomic single call.
+    """Post embeds to a Discord webhook, one message per embed.
 
-    Discord returns HTTP 400 for >10 embeds or >6000 total chars; the builder
-    is responsible for staying under the limits. This function just posts via
-    the shared _post_payload helper (same 429-retry semantics as send()).
+    Each embed becomes a distinct feed item in the channel, with its own
+    title shown in the timeline. Stacking all takeaways into a single
+    message works in Discord's expanded view but shows up as a single
+    entry in the feed, so the user only sees the top embed and assumes
+    the video had one takeaway. One embed per message surfaces every
+    takeaway as its own message and avoids that surprise.
+
+    A 429 on any single request is retried once via the shared
+    ``_post_payload`` helper, so a rate-limited message does not abort
+    the rest of the batch. The single-embed body is always well under
+    Discord's per-message caps (10 embeds, 6000 chars), so no chunking
+    logic is needed here.
     """
     if not embeds:
         raise ValueError("send_embeds requires at least one embed")
-    await _post_payload(
-        client, webhook_url + DEFAULT_WEBHOOK_QUERY, {"embeds": embeds}, sleep=sleep
-    )
+    url = webhook_url + DEFAULT_WEBHOOK_QUERY
+    total = len(embeds)
+    for index, embed in enumerate(embeds):
+        await _post_payload(client, url, {"embeds": [embed]}, sleep=sleep)
+        logger.debug("posted discord embed %d/%d", index + 1, total)

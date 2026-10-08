@@ -76,6 +76,9 @@ def _fake(
 
 _VIDEO_ID = "abc123"
 _SHORT_URL = f"https://youtu.be/{_VIDEO_ID}"
+_WATCH_URL = f"https://www.youtube.com/watch?v={_VIDEO_ID}"
+# A short URL with no id in the path, used to exercise the empty-id guard.
+_ID_LESS_URL = "https://youtu.be/"
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +155,11 @@ def test_build_audio_ydl_opts_with_cookies_passes_cookiefile(
 # ---------------------------------------------------------------------------
 
 
-def test_download_audio_returns_ready_when_file_written(tmp_path: Path) -> None:
-    """A landed media file makes the download READY."""
+@pytest.mark.parametrize("url", [_SHORT_URL, _WATCH_URL])
+def test_download_audio_returns_ready_when_file_written(
+    tmp_path: Path, url: str
+) -> None:
+    """A landed media file makes the download READY for both URL forms."""
     # Arrange
     dest = tmp_path / "audio"
     opts = build_audio_ydl_opts(dest)
@@ -163,7 +169,7 @@ def test_download_audio_returns_ready_when_file_written(tmp_path: Path) -> None:
     )
 
     # Act
-    result = download_audio(_SHORT_URL, opts=opts, ydl_class=ydl, dest_dir=dest)
+    result = download_audio(url, opts=opts, ydl_class=ydl, dest_dir=dest)
 
     # Assert
     assert isinstance(result, DownloadResult)
@@ -172,15 +178,22 @@ def test_download_audio_returns_ready_when_file_written(tmp_path: Path) -> None:
     assert result.path.endswith(f"{_VIDEO_ID}.webm")
 
 
-def test_download_audio_returns_not_ready_when_no_file(tmp_path: Path) -> None:
-    """An info dict without a landed file is retryable NOT_READY."""
+@pytest.mark.parametrize("url", [_SHORT_URL, _ID_LESS_URL])
+def test_download_audio_returns_not_ready_when_no_file(
+    tmp_path: Path, url: str
+) -> None:
+    """An info dict without a landed file is retryable NOT_READY.
+
+    The id-less URL case proves the empty-video-id guard skips the file scan
+    instead of globbing for everything.
+    """
     # Arrange
     dest = tmp_path / "audio"
     opts = build_audio_ydl_opts(dest)
     ydl = _fake(info={"id": _VIDEO_ID, "ext": "webm"})
 
     # Act
-    result = download_audio(_SHORT_URL, opts=opts, ydl_class=ydl, dest_dir=dest)
+    result = download_audio(url, opts=opts, ydl_class=ydl, dest_dir=dest)
 
     # Assert
     assert result.state == ProbeState.NOT_READY

@@ -11,8 +11,8 @@ import re
 
 import pytest
 
-from tldw.discord import build_takeaway_embed, build_takeaway_embeds
-from tldw.llm import Takeaways
+from tldw.discord import _format_bullet, build_takeaway_embed, build_takeaway_embeds
+from tldw.llm import Takeaway, TakeawayBullet, Takeaways
 
 _VIDEO_ID = "dQw4w9WgXcQ"
 _VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -172,3 +172,48 @@ def test_build_takeaway_embeds_total_chars_under_limit() -> None:
         for embed in embeds
     )
     assert total < 6000
+
+
+# ---------------------------------------------------------------------------
+# Optional timestamps (audio backend)
+# ---------------------------------------------------------------------------
+
+
+def test_format_bullet_renders_plain_text_when_timestamp_is_none() -> None:
+    """A bullet without a timestamp renders as a plain markdown line."""
+    bullet = TakeawayBullet(text="Hello world", timestamp_seconds=None)
+
+    assert _format_bullet(bullet, video_id="abc") == "- Hello world"
+
+
+def test_format_bullet_renders_deep_link_when_timestamp_is_set() -> None:
+    """A bullet with a timestamp renders as a deep-linked markdown line."""
+    bullet = TakeawayBullet(text="Hi", timestamp_seconds=42)
+
+    assert (
+        _format_bullet(bullet, video_id="abc")
+        == "- [0:42](https://youtu.be/abc?t=42) Hi"
+    )
+
+
+def test_build_takeaway_embed_works_with_none_timestamps() -> None:
+    """An audio-backend takeaway renders plain bullets with no deep links."""
+    takeaway = Takeaway(
+        title="Audio takeaway",
+        summary="Short summary",
+        bullets=[TakeawayBullet(text=f"Point {n}") for n in range(3)],
+    )
+
+    embed = build_takeaway_embed(
+        takeaway,
+        video_id=_VIDEO_ID,
+        video_url=_VIDEO_URL,
+        channel_name=_CHANNEL,
+        index=1,
+    )
+
+    bullet_lines = [
+        line for line in embed["description"].split("\n") if line.startswith("- ")
+    ]
+    assert bullet_lines == ["- Point 0", "- Point 1", "- Point 2"]
+    assert "youtu.be" not in embed["description"]

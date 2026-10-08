@@ -425,3 +425,55 @@ async def test_live_openai_analyzer_returns_takeaways() -> None:
         transcript, video_id="live-smoke", title="Live smoke test"
     )
     assert len(result.items) == 3
+
+
+# ---------------------------------------------------------------------------
+# Optional timestamps (audio backend)
+# ---------------------------------------------------------------------------
+
+
+def _takeaways_without_timestamps() -> Takeaways:
+    """Build a valid three-item Takeaways with no bullet timestamps."""
+    return Takeaways.model_validate(
+        {
+            "items": [
+                {
+                    "title": f"Takeaway {i}",
+                    "summary": f"Summary {i}",
+                    "bullets": [{"text": f"Bullet {i}"}],
+                }
+                for i in range(3)
+            ]
+        }
+    )
+
+
+async def test_takeaways_without_timestamps_render_plain(
+    store: QueueStore, tmp_path: Path
+) -> None:
+    """Audio-backend takeaways render plain bullet lines, not deep links."""
+    # Arrange
+    settings = _make_settings(tmp_path)
+    now = 1000.0
+    _enqueue_with_path(store, _write_vtt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    sender = CountingSend()
+    embeds_sender = CountingSendEmbeds()
+    analyzer = FakeAnalyze(result=_takeaways_without_timestamps())
+
+    # Act
+    await _run(
+        store,
+        tmp_path,
+        settings=settings,
+        now=now,
+        analyze=analyzer,
+        sender=sender,
+        embeds_sender=embeds_sender,
+    )
+
+    # Assert
+    assert analyzer.calls == 1
+    assert embeds_sender.calls == 1
+    descriptions = [embed["description"] for embed in embeds_sender.embeds[0]]
+    assert all("youtu.be" not in description for description in descriptions)
+    assert all("- Bullet" in description for description in descriptions)

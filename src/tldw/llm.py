@@ -49,18 +49,21 @@ logger = logging.getLogger(__name__)
 # the model one chance to correct a bad shape and one to recover from a flake.
 DEFAULT_OUTPUT_RETRIES: int = 2
 
-# The transcript arrives pre-rendered with [m:ss] / [h:mm:ss] anchors at the
-# start of each block. The prompt leans on those anchors so the model can pick
-# accurate timestamp_seconds values instead of guessing.
+# The transcript may arrive with [m:ss] / [h:mm:ss] anchors (vtt backend) or
+# without (audio backend, where the model does the segmenting itself). The
+# prompt asks for timestamps when anchors are present and lets the model omit
+# the field when they are not.
 SYSTEM_PROMPT = (
     "You turn a YouTube transcript into structured takeaways for a busy reader.\n"
     "Return exactly 3 takeaways.\n"
     "Each takeaway has a short title (a few words), a one or two sentence "
     "summary, and one to five bullets.\n"
-    "Every bullet must carry an accurate timestamp_seconds for the moment it "
-    "refers to. The transcript marks moments as [m:ss] or [h:mm:ss] anchors at "
-    "the start of each block; use those anchors to compute the seconds.\n"
-    "Only include a fact when the transcript gives a clear timestamp for it. "
+    "When the transcript marks moments as [m:ss] or [h:mm:ss] anchors at the "
+    "start of each block, set timestamp_seconds to the moment the bullet "
+    "refers to. Compute the seconds from those anchors. When the transcript "
+    "has no anchors, omit timestamp_seconds entirely; the worker renders the "
+    "bullet as a plain line in that case.\n"
+    "Only include a fact when the transcript gives a clear moment for it. "
     "Omit anything you cannot ground in a specific moment.\n"
     "Prefer concrete claims, numbers, and named topics over vague filler.\n"
     "Never invent details that are not in the transcript."
@@ -68,10 +71,16 @@ SYSTEM_PROMPT = (
 
 
 class TakeawayBullet(BaseModel):
-    """One bullet in a takeaway, tied to a moment in the video."""
+    """One bullet in a takeaway, optionally tied to a moment in the video.
+
+    ``timestamp_seconds`` is optional because the audio backend delivers
+    plain text with no cue timings, while the vtt backend delivers timed
+    cues. The Discord renderer formats the bullet with a YouTube deep link
+    when the timestamp is set, and as a plain line otherwise.
+    """
 
     text: str = Field(min_length=1)
-    timestamp_seconds: int = Field(ge=0)
+    timestamp_seconds: int | None = Field(default=None, ge=0)
 
 
 class Takeaway(BaseModel):
@@ -215,6 +224,11 @@ def snap_timestamps(
         new_bullets: list[TakeawayBullet] = []
         for bullet in takeaway.bullets:
             original = bullet.timestamp_seconds
+            # Bullets without a timestamp are the audio-backend shape: the
+            # transcript has no cues, so there is nothing to snap against.
+            if original is None:
+                new_bullets.append(bullet)
+                continue
             # bisect_left gives the first cue at or after the timestamp. The
             # nearest cue is either that one or the one just before it.
             idx = bisect.bisect_left(starts, original)

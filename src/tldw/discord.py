@@ -186,7 +186,15 @@ async def send(
 
 
 def _format_bullet(bullet: TakeawayBullet, video_id: str) -> str:
-    """Render one bullet as '- [m:ss](deep-link) text' for Discord markdown."""
+    """Render one bullet as a Discord markdown line.
+
+    Bullets with a ``timestamp_seconds`` become ``- [m:ss](deep-link) text`` so
+    the bullet links to the moment in the video. Bullets without one
+    (audio-backend takeaways, where the transcript has no cues) render as a
+    plain ``- text`` line.
+    """
+    if bullet.timestamp_seconds is None:
+        return f"- {bullet.text}"
     ts = format_timestamp(bullet.timestamp_seconds)
     link = youtube_deep_link(video_id, bullet.timestamp_seconds)
     return f"- [{ts}]({link}) {bullet.text}"

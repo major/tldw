@@ -1,4 +1,10 @@
-FROM registry.access.redhat.com/hi/python:3.14-builder@sha256:a260cb9e1e713ff590b7340984ec1e8ea2cff0db4b453677e36c05a82f9fbe71 AS builder
+# Official Python 3.14 image on Docker Hub, the full Debian-based variant
+# (not `python:3.14-slim`). The image is layered on top of
+# `buildpack-deps:bookworm`, so it ships with pip, the Python development
+# headers, and the toolchain (gcc, make, etc.) needed to compile the project's
+# wheels. That makes it suitable for both the builder stage below and the
+# runtime stage at the bottom of this file.
+FROM python:3.14@sha256:c23ebccb22bca6335521be462d1d4a3449a623c5ca8ce513d163c79c636dae79 AS builder
 
 ENV PATH="/tmp/.local/bin:${PATH}"
 
@@ -25,7 +31,10 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
     && rm /tmp/deno.zip \
     && /usr/local/bin/deno --version
 
-FROM registry.access.redhat.com/hi/python:3.14@sha256:9e5c94e0f676b2be9bf623fc1292b601358af588d4653eb547b4c7ae4295bae8
+# Same official image for the runtime stage. Using the full Debian variant
+# keeps the system libraries yt-dlp reaches into (libsqlite3, libssl, etc.)
+# present, and gives us apt-get for installing ffmpeg below.
+FROM python:3.14@sha256:c23ebccb22bca6335521be462d1d4a3449a623c5ca8ce513d163c79c636dae79
 
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown
@@ -44,18 +53,31 @@ ENV TLDW_GIT_SHA=${GIT_SHA} \
 ENV TLDW_QUEUE_FILE=/data/queue.sqlite3 \
     TLDW_TRANSCRIPT_DIR=/data/transcripts
 
+# ffmpeg is required by yt-dlp for format postprocessing (merging separate
+# video/audio streams, transcoding, extracting audio, etc.). Install it from
+# the Debian Bookworm repository and clean up the apt cache so the extra
+# metadata does not bloat the final image. --no-install-recommends keeps the
+# install to ffmpeg and its hard dependencies only.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && ffmpeg -version | head -n 1
+
 WORKDIR /opt/app-root/src
 
-COPY --from=builder --chown=65532:0 /opt/app-root/src/.venv /opt/app-root/src/.venv
-COPY --from=builder --chown=65532:0 /opt/app-root/src/channels.json /opt/app-root/src/channels.json
+# The official Python image ships a non-root `python` user (uid:gid 1000:1000).
+# Copy the build artefacts with that ownership so the runtime user can read and
+# execute them without ever needing root.
+COPY --from=builder --chown=1000:1000 /opt/app-root/src/.venv /opt/app-root/src/.venv
+COPY --from=builder --chown=1000:1000 /opt/app-root/src/channels.json /opt/app-root/src/channels.json
 
 # Deno JavaScript runtime for yt-dlp (see the builder stage comment). Placed in
 # /usr/local/bin so it is on PATH for the non-root runtime user.
-COPY --from=builder --chown=65532:0 /usr/local/bin/deno /usr/local/bin/deno
+COPY --from=builder --chown=1000:1000 /usr/local/bin/deno /usr/local/bin/deno
 
 ENV PATH="/opt/app-root/src/.venv/bin:${PATH}"
 
 EXPOSE 8000
 
-USER 65532:0
+USER 1000:1000
 ENTRYPOINT ["/opt/app-root/src/.venv/bin/tldw"]

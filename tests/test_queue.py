@@ -137,6 +137,7 @@ def test_enqueue_persists_all_fields(tmp_path: Path) -> None:
     assert record.last_attempt_at is None
     assert record.next_attempt_at == 100.0
     assert record.transcript_path is None
+    assert record.audio_path is None
     assert record.terminal_state is None
     assert record.detail is None
     assert record.rate_limit_streak == 0
@@ -594,4 +595,253 @@ def test_open_store_returns_queue_store(tmp_path: Path) -> None:
 
     # Assert
     assert isinstance(store, QueueStore)
+    store.close()
+
+
+def test_enqueue_with_delay_pushes_next_attempt_at(tmp_path: Path) -> None:
+    """A delay_seconds value pushes the first probe into the future."""
+    # Arrange
+    path = tmp_path / "queue.sqlite3"
+    store = open_store(path)
+
+    # Act
+    store.enqueue(_entry(), now=100.0, delay_seconds=300.0)
+    before = store.next_due(now=399.0)
+    due = store.next_due(now=400.0)
+    row = _read_row(path, "dQw4w9WgXcQ")
+
+    # Assert
+    assert before is None
+    assert due is not None
+    assert due.video_id == "dQw4w9WgXcQ"
+    assert row["next_attempt_at"] == 400.0
+    store.close()
+
+
+def test_enqueue_with_default_delay_is_immediate(tmp_path: Path) -> None:
+    """Omitting delay_seconds leaves the first probe due immediately."""
+    # Arrange
+    path = tmp_path / "queue.sqlite3"
+    store = open_store(path)
+
+    # Act
+    store.enqueue(_entry(), now=100.0)
+    due = store.next_due(now=100.0)
+    row = _read_row(path, "dQw4w9WgXcQ")
+
+    # Assert
+    assert due is not None
+    assert due.video_id == "dQw4w9WgXcQ"
+    assert row["next_attempt_at"] == 100.0
+    store.close()
+
+
+def test_enqueue_duplicate_with_delay_preserves_original_schedule(
+    tmp_path: Path,
+) -> None:
+    """An ignored duplicate must not push the original schedule."""
+    # Arrange
+    path = tmp_path / "queue.sqlite3"
+    store = open_store(path)
+    store.enqueue(_entry(), now=100.0, delay_seconds=300.0)
+
+    # Act
+    second = store.enqueue(_entry(), now=200.0, delay_seconds=600.0)
+    row = _read_row(path, "dQw4w9WgXcQ")
+
+    # Assert
+    assert second is False
+    assert row["enqueued_at"] == 100.0
+    assert row["next_attempt_at"] == 400.0
+    store.close()
+
+
+def test_enqueue_with_zero_delay_equivalent_to_default(tmp_path: Path) -> None:
+    """An explicit zero delay schedules the first probe the same as no delay."""
+    # Arrange
+    explicit_store = open_store(tmp_path / "explicit.sqlite3")
+    default_store = open_store(tmp_path / "default.sqlite3")
+
+    # Act
+    explicit_store.enqueue(_entry(), now=100.0, delay_seconds=0.0)
+    default_store.enqueue(_entry(), now=200.0)
+    explicit_due = explicit_store.next_due(now=100.0)
+    default_due = default_store.next_due(now=200.0)
+    explicit_row = _read_row(tmp_path / "explicit.sqlite3", "dQw4w9WgXcQ")
+    default_row = _read_row(tmp_path / "default.sqlite3", "dQw4w9WgXcQ")
+
+    # Assert
+    assert explicit_due is not None
+    assert default_due is not None
+    assert explicit_row["next_attempt_at"] == 100.0
+    assert explicit_row["next_attempt_at"] == explicit_row["enqueued_at"]
+    assert default_row["next_attempt_at"] == 200.0
+    assert default_row["next_attempt_at"] == default_row["enqueued_at"]
+    explicit_store.close()
+    default_store.close()
+
+
+def test_audio_path_defaults_to_none_on_new_record(tmp_path: Path) -> None:
+    """A freshly enqueued record has no audio path yet."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+
+    # Act
+    store.enqueue(_entry(), now=100.0)
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.audio_path is None
+    store.close()
+
+
+def test_mark_attempt_sets_audio_path_when_provided(tmp_path: Path) -> None:
+    """A provided audio_path is stored and the attempt still counts."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+
+    # Act
+    store.mark_attempt(
+        "dQw4w9WgXcQ", now=120.0, audio_path="/data/audio/abc.webm"
+    )
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.audio_path == "/data/audio/abc.webm"
+    assert record.attempts == 1
+    store.close()
+
+
+def test_mark_attempt_preserves_audio_path_when_not_provided(
+    tmp_path: Path,
+) -> None:
+    """Omitting audio_path leaves an existing path in place."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.mark_attempt("dQw4w9WgXcQ", now=110.0, audio_path="/data/audio/abc.webm")
+
+    # Act
+    store.mark_attempt("dQw4w9WgXcQ", now=120.0, audio_path=None)
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.audio_path == "/data/audio/abc.webm"
+    store.close()
+
+
+def test_mark_attempt_bumps_attempts_when_setting_audio_path(
+    tmp_path: Path,
+) -> None:
+    """Setting audio_path through mark_attempt still counts one attempt."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+
+    # Act
+    store.mark_attempt("dQw4w9WgXcQ", now=130.0, audio_path="/path")
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.attempts == 1
+    assert record.last_attempt_at == 130.0
+    store.close()
+
+
+def test_reschedule_updates_audio_path_without_incrementing_attempts(
+    tmp_path: Path,
+) -> None:
+    """reschedule stores an audio path without touching attempts or time."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.mark_attempt("dQw4w9WgXcQ", now=110.0)
+
+    # Act
+    store.reschedule("dQw4w9WgXcQ", audio_path="/data/audio/abc.webm")
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.attempts == 1
+    assert record.audio_path == "/data/audio/abc.webm"
+    assert record.last_attempt_at == 110.0
+    store.close()
+
+
+def test_reschedule_preserves_audio_path_when_not_provided(
+    tmp_path: Path,
+) -> None:
+    """A reschedule without audio_path leaves the existing path alone."""
+    # Arrange
+    store = open_store(tmp_path / "queue.sqlite3")
+    store.enqueue(_entry(), now=100.0)
+    store.reschedule("dQw4w9WgXcQ", audio_path="/x.webm")
+
+    # Act
+    store.reschedule("dQw4w9WgXcQ", next_attempt_at=999.0)
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert record is not None
+    assert record.audio_path == "/x.webm"
+    assert record.next_attempt_at == 999.0
+    store.close()
+
+
+def test_open_store_migrates_old_db_to_add_audio_path(tmp_path: Path) -> None:
+    """A database written before audio_path existed gains the column on open."""
+    # Arrange
+    path = tmp_path / "queue.sqlite3"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE videos ("
+            " video_id TEXT PRIMARY KEY,"
+            " url TEXT NOT NULL,"
+            " channel_id TEXT NOT NULL,"
+            " channel_name TEXT NOT NULL,"
+            " title TEXT NOT NULL,"
+            " published TEXT,"
+            " enqueued_at REAL NOT NULL,"
+            " attempts INTEGER NOT NULL DEFAULT 0,"
+            " last_attempt_at REAL,"
+            " next_attempt_at REAL NOT NULL,"
+            " transcript_path TEXT,"
+            " terminal_state TEXT,"
+            " detail TEXT,"
+            " rate_limit_streak INTEGER NOT NULL DEFAULT 0"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO videos "
+            "(video_id, url, channel_id, channel_name, title, enqueued_at, "
+            " attempts, next_attempt_at) "
+            "VALUES ('old', 'u', 'c', 'n', 't', 100.0, 0, 100.0)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Act
+    store = open_store(path)
+    columns_conn = sqlite3.connect(str(path))
+    try:
+        columns = [
+            column[1]
+            for column in columns_conn.execute("PRAGMA table_info(videos)").fetchall()
+        ]
+    finally:
+        columns_conn.close()
+    record = store.next_due(now=1e12)
+
+    # Assert
+    assert "audio_path" in columns
+    assert record is not None
+    assert record.audio_path is None
     store.close()

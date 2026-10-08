@@ -4,6 +4,11 @@ These tests cover the two configuration sources for the channel list: the
 ``TLDW_CHANNEL_IDS`` environment variable and the JSON file named by
 ``TLDW_CHANNELS_FILE``. They also pin down the YouTube channel id validation
 policy so malformed ids fail fast with a message the operator can act on.
+
+The audio pipeline settings (``TLDW_TRANSCRIPT_BACKEND``,
+``TLDW_AUDIO_*``, ``TLDW_TRANSCRIBE_*``, ``TLDW_FFMPEG_TIMEOUT_SECONDS``) live
+in the same ``Settings`` model and are tested in the ``test_audio_settings``
+group at the bottom of this file.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from tldw.config import Settings, resolve_channel_ids
 
@@ -25,6 +31,15 @@ _TLDW_ENV_VARS = (
     "TLDW_CHANNELS_FILE",
     "TLDW_CHANNEL_IDS",
     "TLDW_HUB_SECRET",
+    "TLDW_TRANSCRIPT_BACKEND",
+    "TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS",
+    "TLDW_AUDIO_DIR",
+    "TLDW_AUDIO_FORMAT",
+    "TLDW_AUDIO_BITRATE",
+    "TLDW_FFMPEG_TIMEOUT_SECONDS",
+    "TLDW_TRANSCRIBE_MODEL",
+    "TLDW_TRANSCRIBE_LANGS",
+    "TLDW_TRANSCRIBE_TIMEOUT_SECONDS",
 )
 
 
@@ -269,3 +284,136 @@ def test_settings_channel_ids_file_is_path(
 
     # Assert
     assert settings.channel_ids_file == Path("/tmp/foo.json")
+
+
+# ---------------------------------------------------------------------------
+# Audio pipeline settings
+# ---------------------------------------------------------------------------
+
+
+def test_audio_settings_defaults(settings_kwargs: Callable[..., dict[str, Any]]) -> None:
+    """The audio pipeline defaults match the documented plan."""
+    # Arrange
+    # settings_kwargs already cleared every audio env var.
+
+    # Act
+    settings = Settings(**settings_kwargs())
+
+    # Assert
+    assert settings.transcript_backend == "audio"
+    assert settings.audio_download_delay_seconds == 300.0
+    assert settings.audio_dir == Path("audio")
+    assert settings.audio_format == "webm"
+    assert settings.audio_bitrate == "32k"
+    assert settings.ffmpeg_timeout_seconds == 900.0
+    assert settings.transcribe_model == "gpt-transcribe"
+    assert settings.transcribe_langs == ["en"]
+    assert settings.transcribe_timeout_seconds == 600.0
+
+
+def test_audio_settings_read_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """Every audio env var overrides the corresponding default."""
+    # Arrange
+    monkeypatch.setenv("TLDW_TRANSCRIPT_BACKEND", "vtt")
+    monkeypatch.setenv("TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS", "120")
+    monkeypatch.setenv("TLDW_AUDIO_DIR", "/var/cache/audio")
+    monkeypatch.setenv("TLDW_AUDIO_FORMAT", "m4a")
+    monkeypatch.setenv("TLDW_AUDIO_BITRATE", "48k")
+    monkeypatch.setenv("TLDW_FFMPEG_TIMEOUT_SECONDS", "300")
+    monkeypatch.setenv("TLDW_TRANSCRIBE_MODEL", "gpt-transcribe")
+    monkeypatch.setenv("TLDW_TRANSCRIBE_LANGS", '["en","es"]')
+    monkeypatch.setenv("TLDW_TRANSCRIBE_TIMEOUT_SECONDS", "120")
+
+    # Act
+    settings = Settings(**settings_kwargs())
+
+    # Assert
+    assert settings.transcript_backend == "vtt"
+    assert settings.audio_download_delay_seconds == 120.0
+    assert settings.audio_dir == Path("/var/cache/audio")
+    assert settings.audio_format == "m4a"
+    assert settings.audio_bitrate == "48k"
+    assert settings.ffmpeg_timeout_seconds == 300.0
+    assert settings.transcribe_model == "gpt-transcribe"
+    assert settings.transcribe_langs == ["en", "es"]
+    assert settings.transcribe_timeout_seconds == 120.0
+
+
+def test_transcript_backend_rejects_unknown_value(
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """A typo in TLDW_TRANSCRIPT_BACKEND fails fast at startup."""
+    # Arrange
+    # Act / Assert
+    with pytest.raises(ValidationError, match="transcript_backend"):
+        Settings(**settings_kwargs(transcript_backend="bogus"))
+
+
+def test_audio_format_rejects_unsupported_container(
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """A container OpenAI will not decode fails at startup, not at first video."""
+    # Arrange
+    # Act / Assert
+    with pytest.raises(ValidationError, match="audio_format"):
+        Settings(**settings_kwargs(audio_format="ogg"))
+
+
+def test_audio_format_rejects_opus_container(
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """``.opus`` is not in OpenAI's accepted list; use ``.webm`` for Opus."""
+    # Arrange
+    # Act / Assert
+    with pytest.raises(ValidationError, match="audio_format"):
+        Settings(**settings_kwargs(audio_format="opus"))
+
+
+@pytest.mark.parametrize(
+    "container",
+    ["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"],
+)
+def test_audio_format_accepts_openai_supported_containers(
+    container: str,
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """Every container on OpenAI's accepted list passes validation."""
+    # Arrange
+    # Act
+    settings = Settings(**settings_kwargs(audio_format=container))
+
+    # Assert
+    assert settings.audio_format == container
+
+
+def test_audio_download_delay_rejects_negative(
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """A negative delay would push the row into the past; reject at startup."""
+    # Arrange
+    # Act / Assert
+    with pytest.raises(ValidationError, match="audio_download_delay_seconds"):
+        Settings(**settings_kwargs(audio_download_delay_seconds=-1.0))
+
+
+def test_ffmpeg_timeout_rejects_zero(
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """A zero timeout would kill every ffmpeg call; require ``gt=0``."""
+    # Arrange
+    # Act / Assert
+    with pytest.raises(ValidationError, match="ffmpeg_timeout_seconds"):
+        Settings(**settings_kwargs(ffmpeg_timeout_seconds=0))
+
+
+def test_transcribe_timeout_rejects_zero(
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """A zero timeout would kill every transcribe call; require ``gt=0``."""
+    # Arrange
+    # Act / Assert
+    with pytest.raises(ValidationError, match="transcribe_timeout_seconds"):
+        Settings(**settings_kwargs(transcribe_timeout_seconds=0))

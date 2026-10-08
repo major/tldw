@@ -290,7 +290,15 @@ def create_app(
         for entry in entries:
             if store is not None:
                 try:
-                    inserted = store.enqueue(entry)
+                    # The audio backend debounces the first download so YouTube
+                    # has time to finish producing the audio track; the vtt
+                    # backend has no such delay.
+                    delay_seconds = (
+                        app.state.settings.audio_download_delay_seconds
+                        if app.state.settings.transcript_backend == "audio"
+                        else 0.0
+                    )
+                    inserted = store.enqueue(entry, delay_seconds=delay_seconds)
                 except Exception:
                     # Best effort: the hub already got its 200, so a queue
                     # failure must not turn into a 500 and an endless retry.

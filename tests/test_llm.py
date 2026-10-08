@@ -31,6 +31,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel  #
 
 from tldw.config import Settings  # noqa: E402
 from tldw.llm import (  # noqa: E402
+    SYSTEM_PROMPT,
     OpenAIAnalyzer,
     Takeaway,
     TakeawayBullet,
@@ -263,7 +264,7 @@ def _takeaways_with_bullet_times(bullet_times: list[list[int]]) -> Takeaways:
     )
 
 
-def _all_bullet_timestamps(takeaways: Takeaways) -> list[int]:
+def _all_bullet_timestamps(takeaways: Takeaways) -> list[int | None]:
     """Return every bullet timestamp across all items, in item then bullet order."""
     return [
         bullet.timestamp_seconds
@@ -372,3 +373,57 @@ class TestSnapTimestamps:
         ]
         assert len(result.items) == 3
         assert all(len(item.bullets) == 2 for item in result.items)
+
+
+# ---------------------------------------------------------------------------
+# Optional timestamps (audio backend)
+# ---------------------------------------------------------------------------
+
+
+def test_takeaway_bullet_timestamp_seconds_defaults_to_none() -> None:
+    """A bullet without a timestamp is valid and defaults the field to None."""
+    bullet = TakeawayBullet(text="x")
+
+    assert bullet.timestamp_seconds is None
+
+
+def test_takeaway_bullet_rejects_negative_timestamp_when_set() -> None:
+    """The ge=0 constraint still applies when a timestamp is provided."""
+    with pytest.raises(ValidationError):
+        TakeawayBullet(text="x", timestamp_seconds=-1)
+
+
+def _takeaways_with_none_bullets() -> Takeaways:
+    """Build valid Takeaways where every bullet has no timestamp."""
+    return Takeaways.model_validate(
+        {
+            "items": [
+                {
+                    "title": f"Takeaway {i}",
+                    "summary": f"Summary {i}",
+                    "bullets": [{"text": f"Bullet {i}", "timestamp_seconds": None}],
+                }
+                for i in range(3)
+            ]
+        }
+    )
+
+
+def test_snap_timestamps_preserves_none_values() -> None:
+    """Bullets with no timestamp pass through snap_timestamps unchanged."""
+    takeaways = _takeaways_with_none_bullets()
+    cues = [Cue(start=0.0, text="a"), Cue(start=60.0, text="b")]
+
+    result = snap_timestamps(takeaways, cues)
+
+    assert result == takeaways
+    assert all(
+        bullet.timestamp_seconds is None
+        for item in result.items
+        for bullet in item.bullets
+    )
+
+
+def test_system_prompt_mentions_optional_timestamps() -> None:
+    """The prompt tells the model it may omit timestamp_seconds."""
+    assert "timestamp_seconds" in SYSTEM_PROMPT

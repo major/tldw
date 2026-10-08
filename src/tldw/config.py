@@ -18,6 +18,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 # YouTube channel ids are "UC" followed by 22 characters from [A-Za-z0-9_-].
 _CHANNEL_ID_RE = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
+
+# OpenAI's /v1/audio/transcriptions endpoint accepts this exact set of input
+# containers. Rejecting unknown values at startup prevents a typo (e.g. "ogg" or
+# "opus") from turning into a 400 on the first video. Sourced from the OpenAI
+# Speech-to-Text guide; the union covers both the docs and the SDK docstring.
+_OPENAI_AUDIO_FORMATS: frozenset[str] = frozenset(
+    {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}
+)
 
 
 class Settings(BaseSettings):
@@ -54,6 +63,15 @@ class Settings(BaseSettings):
         TLDW_LLM_MAX_OUTPUT_TOKENS: max tokens the takeaway model may generate.
         TLDW_LLM_MAX_INPUT_CHARS: hard cap on transcript characters sent to the LLM.
         TLDW_TAKEAWAY_MAX_BULLETS: max bullets kept per takeaway item.
+        TLDW_TRANSCRIPT_BACKEND: which fetch path to use: "audio" (default) or "vtt".
+        TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS: delay before the first audio download.
+        TLDW_AUDIO_DIR: directory for raw audio downloads and compressed artifacts.
+        TLDW_AUDIO_FORMAT: output container for ffmpeg; must be in OpenAI's accepted set.
+        TLDW_AUDIO_BITRATE: target bitrate for ffmpeg Opus encoding.
+        TLDW_FFMPEG_TIMEOUT_SECONDS: per-call ffmpeg timeout.
+        TLDW_TRANSCRIBE_MODEL: OpenAI speech-to-text model name.
+        TLDW_TRANSCRIBE_LANGS: JSON list of ISO-639-1 language hints for transcription.
+        TLDW_TRANSCRIBE_TIMEOUT_SECONDS: per-call transcription timeout.
     """
 
     model_config = SettingsConfigDict(
@@ -116,6 +134,43 @@ class Settings(BaseSettings):
     llm_max_input_chars: int = 300_000
     # Per-takeaway bullet cap, applied by the analyzer after validation.
     takeaway_max_bullets: int = 5
+
+    # Transcript backend selector. ``audio`` downloads the video's audio track
+    # and sends it to OpenAI for transcription; ``vtt`` falls back to the
+    # historical yt-dlp subtitle fetch. Kept as a Literal so a typo is a startup
+    # failure rather than a silent fallback.
+    transcript_backend: Literal["audio", "vtt"] = "audio"
+
+    # Audio pipeline settings. The 5 minute default debounces notifications and
+    # gives YouTube's ASR pipeline time to finish producing the video.
+    audio_download_delay_seconds: float = Field(default=300.0, ge=0)
+    audio_dir: Path = Path("audio")
+    audio_format: str = "webm"
+    audio_bitrate: str = "32k"
+    ffmpeg_timeout_seconds: float = Field(default=900.0, gt=0)
+
+    # OpenAI speech-to-text. ``gpt-transcribe`` is the current model; the
+    # ``gpt-4o-transcribe`` family is deprecated and shuts down 2027-02-26.
+    transcribe_model: str = "gpt-transcribe"
+    transcribe_langs: list[str] = Field(default_factory=lambda: ["en"])
+    transcribe_timeout_seconds: float = Field(default=600.0, gt=0)
+
+    @field_validator("audio_format")
+    @classmethod
+    def _validate_audio_format(cls, value: str) -> str:
+        """Reject containers that OpenAI's transcription endpoint will not accept.
+
+        Failing fast at startup is much better than failing the first video with
+        a mysterious 400 from the API. The accepted set is documented at
+        developers.openai.com/api/docs/guides/speech-to-text.
+        """
+        if value not in _OPENAI_AUDIO_FORMATS:
+            choices = ", ".join(sorted(_OPENAI_AUDIO_FORMATS))
+            raise ValueError(
+                f"audio_format {value!r} is not supported by OpenAI; "
+                f"choose one of: {choices}"
+            )
+        return value
 
     @field_validator("discord_webhook_url", mode="before")
     @classmethod

@@ -61,6 +61,9 @@ def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "discord_webhook_url": "https://discord.com/api/webhooks/x/y",
         "transcript_dir": tmp_path / "transcripts",
         "queue_file": tmp_path / "queue.sqlite3",
+        # These tests drive the historical VTT loop path; the audio backend is
+        # covered by tests/test_worker_audio.py.
+        "transcript_backend": "vtt",
     }
     defaults.update(overrides)
     return Settings(**defaults)

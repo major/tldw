@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 # index covers only pending rows, which is exactly the set next_due scans, so
 # it stays small even as completed history grows. ``rate_limit_streak`` counts
 # consecutive 429 outcomes for the row; any other outcome resets it to 0.
+# ``audio_path`` holds the path to the compressed audio file on disk once the
+# download + compress stages have finished; the worker skips both stages on a
+# later pass when this column is set.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
     video_id        TEXT PRIMARY KEY,
@@ -64,6 +67,7 @@ CREATE TABLE IF NOT EXISTS videos (
     last_attempt_at REAL,
     next_attempt_at REAL NOT NULL,
     transcript_path TEXT,
+    audio_path      TEXT,
     terminal_state  TEXT,
     detail          TEXT,
     rate_limit_streak INTEGER NOT NULL DEFAULT 0
@@ -78,6 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_due
 # means the column is already present, which is the state we want.
 _MIGRATIONS = (
     "ALTER TABLE videos ADD COLUMN rate_limit_streak INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE videos ADD COLUMN audio_path TEXT",
 )
 
 
@@ -85,15 +90,17 @@ class TerminalState(StrEnum):
     """Why a queued video is no longer pending.
 
     DONE means the transcript was fetched and delivered. The GIVE_UP_* values
-    record the three ways the worker stops trying: the 48 hour cutoff with no
-    captions ever seen, a video that is gone or bot-checked, and a 429 budget
-    that has been exhausted.
+    record the four ways the worker stops trying: the 48 hour cutoff with no
+    captions ever seen, a video that is gone or bot-checked, a 429 budget that
+    has been exhausted, and an audio transcription the API rejected with a
+    permanent 4xx error (for example a corrupt upload).
     """
 
     DONE = "DONE"
     GIVE_UP_NEVER = "GIVE_UP_NEVER"
     GIVE_UP_UNAVAILABLE = "GIVE_UP_UNAVAILABLE"
     GIVE_UP_RATE_LIMITED_DEAD = "GIVE_UP_RATE_LIMITED_DEAD"
+    GIVE_UP_AUDIO = "GIVE_UP_AUDIO"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +118,7 @@ class QueueRecord:
     last_attempt_at: float | None
     next_attempt_at: float
     transcript_path: str | None
+    audio_path: str | None
     terminal_state: TerminalState | None
     detail: str | None
     rate_limit_streak: int
@@ -179,6 +187,7 @@ class QueueStore:
             last_attempt_at=row["last_attempt_at"],
             next_attempt_at=row["next_attempt_at"],
             transcript_path=row["transcript_path"],
+            audio_path=row["audio_path"],
             terminal_state=terminal_state,
             detail=row["detail"],
             # The column always exists: __init__ creates the table with it and
@@ -186,14 +195,23 @@ class QueueStore:
             rate_limit_streak=int(row["rate_limit_streak"]),
         )
 
-    def enqueue(self, entry: VideoEntry, *, now: float | None = None) -> bool:
+    def enqueue(
+        self,
+        entry: VideoEntry,
+        *,
+        now: float | None = None,
+        delay_seconds: float = 0.0,
+    ) -> bool:
         """Insert ``entry`` by video_id; return True on insert, False if seen.
 
-        The first probe is due immediately: ``enqueued_at`` and
-        ``next_attempt_at`` are both set to ``now``. The worker applies its own
-        pacing between probes, so the queue does not need to delay the first
-        lookup. A duplicate video is ignored rather than updated, which keeps
-        the original enqueue time and attempt count intact.
+        The first probe is due at ``now + delay_seconds``: ``enqueued_at`` is
+        ``now`` and ``next_attempt_at`` is ``now + delay_seconds``. A positive
+        delay debounces notifications (e.g. waiting for YouTube's pipeline to
+        finish producing the video) without needing a separate timer. The
+        worker applies its own pacing between probes, so the queue does not
+        need to delay the first lookup. A duplicate video is ignored rather
+        than updated, which keeps the original enqueue time, attempt count,
+        and schedule intact.
         """
         self._ensure_open()
         if now is None:
@@ -211,7 +229,7 @@ class QueueStore:
                 entry.title,
                 entry.published,
                 now,
-                now,
+                now + delay_seconds,
             ),
         )
         self._conn.commit()
@@ -239,13 +257,14 @@ class QueueStore:
         now: float | None = None,
         next_attempt_at: float | None = None,
         transcript_path: str | None = None,
+        audio_path: str | None = None,
     ) -> None:
         """Record one probe and optionally reschedule or store the transcript.
 
         ``attempts`` is incremented and ``last_attempt_at`` is set to ``now`` on
-        every call. ``next_attempt_at`` and ``transcript_path`` are updated only
-        when a value is provided, so a caller that only wants to count the
-        attempt leaves the existing schedule and path untouched.
+        every call. ``next_attempt_at``, ``transcript_path``, and ``audio_path``
+        are updated only when a value is provided, so a caller that only wants
+        to count the attempt leaves the existing schedule and paths untouched.
         """
         self._ensure_open()
         if now is None:
@@ -258,6 +277,9 @@ class QueueStore:
         if transcript_path is not None:
             assignments.append("transcript_path = ?")
             params.append(transcript_path)
+        if audio_path is not None:
+            assignments.append("audio_path = ?")
+            params.append(audio_path)
         params.append(video_id)
         self._conn.execute(
             f"UPDATE videos SET {', '.join(assignments)} WHERE video_id = ?",
@@ -271,10 +293,11 @@ class QueueStore:
         *,
         next_attempt_at: float | None = None,
         transcript_path: str | None = None,
+        audio_path: str | None = None,
         rate_limit_streak: int | None = None,
         now: float | None = None,
     ) -> None:
-        """Update schedule, transcript path, or rate-limit streak in place.
+        """Update schedule, paths, or rate-limit streak in place.
 
         Every argument left as None is left unchanged on the row. This method
         never touches ``attempts`` or ``last_attempt_at``; those belong to
@@ -294,6 +317,9 @@ class QueueStore:
         if transcript_path is not None:
             assignments.append("transcript_path = ?")
             params.append(transcript_path)
+        if audio_path is not None:
+            assignments.append("audio_path = ?")
+            params.append(audio_path)
         if rate_limit_streak is not None:
             assignments.append("rate_limit_streak = ?")
             params.append(rate_limit_streak)

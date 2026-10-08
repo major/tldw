@@ -60,6 +60,15 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_LLM_MAX_OUTPUT_TOKENS` | No | `2048` | Maximum tokens the takeaway model may generate |
 | `TLDW_LLM_MAX_INPUT_CHARS` | No | `300000` | Hard cap on transcript characters sent to the model. Longer transcripts are truncated with a warning |
 | `TLDW_TAKEAWAY_MAX_BULLETS` | No | `5` | Maximum bullets kept per takeaway |
+| `TLDW_TRANSCRIPT_BACKEND` | No | `audio` | Which fetch path to use. `audio` downloads the video's audio, compresses it with ffmpeg, and sends it to OpenAI for transcription (default; requires `TLDW_OPENAI_API_KEY`). `vtt` falls back to yt-dlp's subtitle download |
+| `TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS` | No | `300` | Delay before the first audio download. Debounces notifications and gives YouTube's pipeline time to finish producing the video |
+| `TLDW_AUDIO_DIR` | No | `audio` | Directory for raw audio downloads and compressed artifacts. May be ephemeral: the worker re-downloads on crash before the transcript is cached |
+| `TLDW_AUDIO_FORMAT` | No | `webm` | Output container for ffmpeg. Must be in OpenAI's accepted set: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, or `webm`. Use `webm` for the smallest files (Opus codec) |
+| `TLDW_AUDIO_BITRATE` | No | `32k` | Target bitrate for ffmpeg Opus encoding. `32k` is enough for speech and keeps a 1-hour video under 15 MB, well under OpenAI's 25 MB upload limit |
+| `TLDW_FFMPEG_TIMEOUT_SECONDS` | No | `900` | Per-call ffmpeg timeout, in seconds |
+| `TLDW_TRANSCRIBE_MODEL` | No | `gpt-transcribe` | OpenAI speech-to-text model. `gpt-transcribe` is the current recommended model; the `gpt-4o-transcribe` family is deprecated and shuts down 2027-02-26 |
+| `TLDW_TRANSCRIBE_LANGS` | No | `["en"]` | JSON list of ISO-639-1 language hints to pass to the transcription API |
+| `TLDW_TRANSCRIBE_TIMEOUT_SECONDS` | No | `600` | Per-call transcription timeout, in seconds |
 
 The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
 
@@ -104,6 +113,12 @@ YouTube session cookies expire, typically after a few weeks of inactivity. When 
 When `TLDW_OPENAI_API_KEY` is set, the worker sends the transcript through the OpenAI API and posts three Discord embeds instead of the plain digest. Each embed has a short title, a summary, and bullet points that link back to the exact moment in the video. The timestamps come from the `[m:ss]` anchors the worker adds to the rendered transcript. Unset the API key to disable takeaways and go back to the plain text digest.
 
 If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a probe, so it does not consume the request budget. :robot:
+
+### Roll-back to subtitle transcripts
+
+Set `TLDW_TRANSCRIPT_BACKEND=vtt` to switch back to the historical yt-dlp subtitle path. No redeploy is needed: change the environment variable and restart the service.
+
+The queue is shared, so the switch loses nothing. Any audio record whose transcript already landed as a cached `.txt` keeps delivering through the vtt path's `first_lines` fallback. See the `TLDW_TRANSCRIPT_BACKEND` row in the environment table above for the default and the audio-backend requirements.
 
 ## Run :rocket:
 

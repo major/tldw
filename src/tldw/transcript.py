@@ -164,9 +164,21 @@ def build_ydl_opts(
         # probe robust against format rotation.
         "ignore_no_formats_error": True,
         # Cluster egress IPs are commonly bot-checked on the default web client
-        # but accepted on ios or tv_embedded, so try the default first and fall
-        # back in that order.
-        "extractor_args": {"youtube": {"player_client": ["default", "ios", "tv_embedded"]}},
+        # but accepted on mobile or embedded clients. ``visionos`` is the
+        # current preferred default; ``web_safari`` and ``mweb`` are common
+        # fallbacks; ``tv`` and ``web_embedded`` are the last-resort embedded
+        # clients. ``tv_embedded`` was removed in 2026.
+        "extractor_args": {
+            "youtube": {
+                "player_client": [
+                    "visionos",
+                    "web_safari",
+                    "tv",
+                    "mweb",
+                    "web_embedded",
+                ]
+            }
+        },
     }
     if cookies_file is not None:
         opts["cookiefile"] = str(cookies_file)

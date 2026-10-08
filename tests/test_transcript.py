@@ -411,7 +411,7 @@ def test_build_ydl_opts_ignores_no_formats_error(tmp_path: Path) -> None:
 
 
 def test_build_ydl_opts_uses_fallback_player_clients(tmp_path: Path) -> None:
-    """The default web client runs first, then ios and tv_embedded fallbacks."""
+    """The visionos web client runs first, then 2026 fallback clients."""
     # Arrange
     # Default opts.
 
@@ -420,7 +420,15 @@ def test_build_ydl_opts_uses_fallback_player_clients(tmp_path: Path) -> None:
 
     # Assert
     assert opts["extractor_args"] == {
-        "youtube": {"player_client": ["default", "ios", "tv_embedded"]}
+        "youtube": {
+            "player_client": [
+                "visionos",
+                "web_safari",
+                "tv",
+                "mweb",
+                "web_embedded",
+            ]
+        }
     }
 
 
@@ -437,7 +445,15 @@ def test_build_ydl_opts_new_opts_apply_with_cookies(tmp_path: Path) -> None:
     assert opts["socket_timeout"] == 30
     assert opts["ignore_no_formats_error"] is True
     assert opts["extractor_args"] == {
-        "youtube": {"player_client": ["default", "ios", "tv_embedded"]}
+        "youtube": {
+            "player_client": [
+                "visionos",
+                "web_safari",
+                "tv",
+                "mweb",
+                "web_embedded",
+            ]
+        }
     }
     assert opts["cookiefile"] == str(cookies)
 
@@ -455,7 +471,15 @@ def test_build_ydl_opts_new_opts_apply_with_langs(tmp_path: Path) -> None:
     assert opts["socket_timeout"] == 30
     assert opts["ignore_no_formats_error"] is True
     assert opts["extractor_args"] == {
-        "youtube": {"player_client": ["default", "ios", "tv_embedded"]}
+        "youtube": {
+            "player_client": [
+                "visionos",
+                "web_safari",
+                "tv",
+                "mweb",
+                "web_embedded",
+            ]
+        }
     }
 
 

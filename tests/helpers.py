@@ -7,8 +7,10 @@ boundary between auto-injected fixtures and explicit helpers stays clear.
 
 from __future__ import annotations
 
-import sqlite3
 import asyncio
+import json
+import logging
+import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -230,3 +232,50 @@ def read_titles(queue_file: Path) -> set[str]:
         return {row[0] for row in conn.execute("SELECT title FROM videos")}
     finally:
         conn.close()
+
+
+def make_channels_file(
+    tmp_path: Path,
+    ids: list[str],
+    *,
+    name: str = "channels.json",
+) -> Path:
+    """Write a ``channels.json`` containing the given channel ids and return its path.
+
+    Default ``name`` is ``channels.json``; tests that need a different filename
+    (rare) can pass one. ``tmp_path`` is required so the file lives under the
+    test's temporary directory.
+    """
+    path = tmp_path / name
+    path.write_text(json.dumps({"channel_ids": ids}), encoding="utf-8")
+    return path
+
+
+def make_log_record(
+    msg: str,
+    *,
+    name: str = "tldw.cli",
+    level: int = logging.INFO,
+    args: tuple[object, ...] | None = None,
+    pathname: str = __file__,
+    lineno: int = 1,
+    fixed_epoch: float | None = 1735689600,
+) -> logging.LogRecord:
+    """Build a ``LogRecord`` with optional deterministic creation time.
+
+    ``fixed_epoch`` defaults to the 2025-01-01T00:00:00+00:00 epoch the
+    CLI tests use, so the rendered asctime is stable. Pass ``None`` to
+    keep the wall-clock default (used by the tldw access-log tests).
+    """
+    record = logging.LogRecord(
+        name=name,
+        level=level,
+        pathname=pathname,
+        lineno=lineno,
+        msg=msg,
+        args=args,
+        exc_info=None,
+    )
+    if fixed_epoch is not None:
+        record.created = fixed_epoch
+    return record

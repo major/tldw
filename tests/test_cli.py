@@ -20,11 +20,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from helpers import make_log_record
 from tldw import cli
-
-# 2025-01-01T00:00:00+00:00 in Unix time. A fixed epoch keeps the rendered
-# timestamp deterministic across machines and time zones.
-_FIXED_EPOCH = 1735689600
 
 
 @pytest.fixture(autouse=True)
@@ -49,34 +46,11 @@ def _restore_root_logger() -> Iterator[None]:
         root.setLevel(saved_level)
 
 
-def _make_record(
-    msg: str,
-    *,
-    name: str = "tldw.cli",
-    level: int = logging.INFO,
-    args: tuple[object, ...] | None = None,
-) -> logging.LogRecord:
-    """Build a LogRecord with a fixed creation time and no exception info."""
-    record = logging.LogRecord(
-        name=name,
-        level=level,
-        pathname=__file__,
-        lineno=1,
-        msg=msg,
-        args=args,
-        exc_info=None,
-    )
-    # Override the wall clock captured by LogRecord.__init__ so the rendered
-    # asctime is a known UTC moment.
-    record.created = _FIXED_EPOCH
-    return record
-
-
 def test_utc_formatter_renders_iso_timestamp_in_utc() -> None:
     """_UtcFormatter renders asctime as ISO 8601 UTC from the fixed epoch."""
     # Arrange
     formatter = cli._UtcFormatter(fmt=cli._LOG_FORMAT, datefmt=cli._LOG_DATEFMT)
-    record = _make_record("hello %s", args=("world",))
+    record = make_log_record("hello %s", args=("world",))
 
     # Act
     line = formatter.format(record)
@@ -161,11 +135,11 @@ def test_suppress_access_path_filter_drops_probe_requests() -> None:
     """_SuppressAccessPath drops the probe path but keeps real callbacks."""
     # Arrange
     access_filter = cli._SuppressAccessPath(cli._PROBE_MARKER)
-    probe = _make_record(
+    probe = make_log_record(
         '127.0.0.1:52342 - "GET /version HTTP/1.1" 200 OK',
         name="uvicorn.access",
     )
-    callback = _make_record(
+    callback = make_log_record(
         '127.0.0.1:52342 - "POST /pubsub/callback HTTP/1.1" 200 OK',
         name="uvicorn.access",
     )

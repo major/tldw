@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac as _hmac
-import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -27,6 +26,7 @@ from fastapi.testclient import TestClient
 from helpers import (
     counting_sleep,
     make_capturing_transport,
+    make_channels_file,
     make_settings,
     make_video_entry,
     never_sleep,
@@ -248,13 +248,6 @@ def client_without_secret(settings_without_secret: Settings) -> Iterator[TestCli
         yield c
 
 
-_EMPTY_ATOM = (
-    b'<?xml version="1.0" encoding="utf-8"?>'
-    b'<feed xmlns="http://www.w3.org/2005/Atom"/>'
-)
-_MALFORMED_ATOM = b"<feed><entry>"  # unclosed tag
-
-
 def test_post_signed_multi_entry_prints_each_video(
     client_with_secret: TestClient,
     multi_entry_payload: bytes,
@@ -364,16 +357,17 @@ def test_post_unsigned_without_secret_prints_lines(
 
 def test_post_malformed_xml_returns_200_and_logs(
     client_with_secret: TestClient,
+    malformed_atom_payload: bytes,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Malformed XML is logged and answered 200 so the hub does not retry forever."""
     # Arrange
-    headers = {"X-Hub-Signature": _sign(_MALFORMED_ATOM)}
+    headers = {"X-Hub-Signature": _sign(malformed_atom_payload)}
 
     # Act
     with caplog.at_level(logging.WARNING):
         response = client_with_secret.post(
-            "/pubsub/callback", content=_MALFORMED_ATOM, headers=headers
+            "/pubsub/callback", content=malformed_atom_payload, headers=headers
         )
 
     # Assert
@@ -386,15 +380,16 @@ def test_post_malformed_xml_returns_200_and_logs(
 
 def test_post_empty_feed_returns_200_and_prints_nothing(
     client_with_secret: TestClient,
+    empty_atom_envelope: bytes,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A signed feed with no entries is accepted and prints nothing."""
     # Arrange
-    headers = {"X-Hub-Signature": _sign(_EMPTY_ATOM)}
+    headers = {"X-Hub-Signature": _sign(empty_atom_envelope)}
 
     # Act
     response = client_with_secret.post(
-        "/pubsub/callback", content=_EMPTY_ATOM, headers=headers
+        "/pubsub/callback", content=empty_atom_envelope, headers=headers
     )
 
     # Assert
@@ -440,25 +435,18 @@ _TOPIC_2 = f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={_CHANNEL_2
 
 
 @pytest.fixture
-def channels_file(tmp_path: Path) -> Path:
-    """Write a channels.json with two valid ids and return its path."""
-    payload = {"channel_ids": [_CHANNEL_1, _CHANNEL_2]}
-    path = tmp_path / "channels.json"
-    path.write_text(json.dumps(payload))
-    return path
-
-
-@pytest.fixture
-def settings_with_channels(tmp_path: Path, channels_file: Path) -> Settings:
+def settings_with_channels(tmp_path: Path) -> Settings:
     """Settings with a callback URL, two channels, and an HMAC secret."""
+    channels_file = make_channels_file(tmp_path, [_CHANNEL_1, _CHANNEL_2])
     return make_settings(
         tmp_path, channel_ids_file=channels_file, hub_secret="topsecret"
     )
 
 
 @pytest.fixture
-def settings_without_callback(tmp_path: Path, channels_file: Path) -> Settings:
+def settings_without_callback(tmp_path: Path) -> Settings:
     """Settings with channels but no callback URL."""
+    channels_file = make_channels_file(tmp_path, [_CHANNEL_1, _CHANNEL_2])
     return make_settings(
         tmp_path,
         channel_ids_file=channels_file,
@@ -470,9 +458,7 @@ def settings_without_callback(tmp_path: Path, channels_file: Path) -> Settings:
 @pytest.fixture
 def empty_channels_file(tmp_path: Path) -> Path:
     """An empty channels.json (no channel_ids key with content)."""
-    path = tmp_path / "channels.json"
-    path.write_text(json.dumps({"channel_ids": []}))
-    return path
+    return make_channels_file(tmp_path, [])
 
 
 @pytest.fixture

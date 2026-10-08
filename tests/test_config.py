@@ -12,7 +12,6 @@ tested in the ``test_audio_settings`` group at the bottom of this file.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -21,50 +20,24 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from helpers import make_channels_file
 from tldw.config import Settings, resolve_channel_ids
-
-# Environment variables the Settings model reads. Cleared before every test so a
-# developer's shell or a CI job cannot leak a value into the assertions.
-_TLDW_ENV_VARS = (
-    "TLDW_CALLBACK_URL",
-    "TLDW_CHANNELS_FILE",
-    "TLDW_CHANNEL_IDS",
-    "TLDW_HUB_SECRET",
-    "TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS",
-    "TLDW_AUDIO_DIR",
-    "TLDW_AUDIO_FORMAT",
-    "TLDW_AUDIO_BITRATE",
-    "TLDW_FFMPEG_TIMEOUT_SECONDS",
-    "TLDW_TRANSCRIBE_MODEL",
-    "TLDW_TRANSCRIBE_LANGS",
-    "TLDW_TRANSCRIBE_TIMEOUT_SECONDS",
-    "TLDW_INCLUDE_SHORTS",
-)
 
 
 @pytest.fixture
-def settings_kwargs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Callable[..., dict[str, Any]]]:
-    """Clear every TLDW_ env var and yield a factory for Settings kwargs.
+def settings_kwargs() -> Iterator[Callable[..., dict[str, Any]]]:
+    """Yield a factory that returns Settings constructor kwargs.
 
-    The factory returns the overrides it is given so tests can read as if they
-    were calling the Settings constructor directly while still starting from a
-    clean environment.
+    The env var cleanup is handled by the autouse ``clean_tldw_env``
+    fixture in conftest, so this fixture no longer touches the
+    environment.
     """
-    for name in _TLDW_ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
 
     def _kwargs(**overrides: Any) -> dict[str, Any]:
         """Return constructor kwargs for Settings merged with the overrides."""
         return dict(overrides)
 
     yield _kwargs
-
-
-def _write_channels_file(path: Path, ids: list[str]) -> None:
-    """Write a channels.json file containing the given channel ids."""
-    path.write_text(json.dumps({"channel_ids": ids}), encoding="utf-8")
 
 
 def test_settings_loads_from_env(
@@ -110,7 +83,11 @@ def test_resolve_uses_env_csv_when_set(
     """A non-empty env CSV wins over the file and keeps its order."""
     # Arrange
     channels_file = tmp_path / "channels.json"
-    _write_channels_file(channels_file, ["UC_FILEAAAAAAAAAAAAAA_xx"])
+    make_channels_file(
+        channels_file.parent,
+        ["UC_FILEAAAAAAAAAAAAAA_xx"],
+        name=channels_file.name,
+    )
     settings = Settings(
         **settings_kwargs(
             channel_ids_file=channels_file,
@@ -134,9 +111,10 @@ def test_resolve_falls_back_to_file_when_no_env(
     """With no env override the channel ids come from the JSON file."""
     # Arrange
     channels_file = tmp_path / "channels.json"
-    _write_channels_file(
-        channels_file,
+    make_channels_file(
+        channels_file.parent,
         ["UC_FILEAAAAAAAAAAAAAA_01", "UC_FILEAAAAAAAAAAAAAA_02"],
+        name=channels_file.name,
     )
     settings = Settings(
         **settings_kwargs(
@@ -159,9 +137,10 @@ def test_resolve_empty_env_falls_back_to_file(
     """A blank env override is treated as unset and the file is used."""
     # Arrange
     channels_file = tmp_path / "channels.json"
-    _write_channels_file(
-        channels_file,
+    make_channels_file(
+        channels_file.parent,
         ["UC_FILEAAAAAAAAAAAAAA_01", "UC_FILEAAAAAAAAAAAAAA_02"],
+        name=channels_file.name,
     )
     settings = Settings(
         **settings_kwargs(
@@ -238,7 +217,9 @@ def test_resolve_rejects_malformed_file_id(
     """A malformed id in the JSON file raises ValueError naming the id."""
     # Arrange
     channels_file = tmp_path / "channels.json"
-    _write_channels_file(channels_file, ["UC_BAD"])
+    make_channels_file(
+        channels_file.parent, ["UC_BAD"], name=channels_file.name
+    )
     settings = Settings(**settings_kwargs(channel_ids_file=channels_file))
 
     # Act

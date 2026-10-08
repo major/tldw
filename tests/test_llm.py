@@ -2,7 +2,7 @@
 
 The Agent is exercised with pydantic-ai's ``FunctionModel`` so the real schema
 validation, retry loop, and timeout path run fully offline. No test touches the
-network: the OpenCode Go client is constructed but never sends a request.
+network: the OpenAI client is constructed but never sends a request.
 
 The banner-off env var is set before pydantic-ai is imported so the agent banner
 does not pollute pytest output.
@@ -31,11 +31,10 @@ from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel  #
 
 from tldw.config import Settings  # noqa: E402
 from tldw.llm import (  # noqa: E402
-    OpencodeGoAnalyzer,
+    OpenAIAnalyzer,
     Takeaway,
     TakeawayBullet,
     Takeaways,
-    session_id_for,
     snap_timestamps,
 )
 from tldw.transcript import Cue  # noqa: E402
@@ -43,7 +42,7 @@ from tldw.transcript import Cue  # noqa: E402
 
 def _settings(**overrides: Any) -> Settings:
     """Build Settings with an API key so the analyzer is enabled by default."""
-    values: dict[str, Any] = {"opencode_api_key": "test-key"}
+    values: dict[str, Any] = {"openai_api_key": "test-key"}
     values.update(overrides)
     return Settings(**values)
 
@@ -94,25 +93,6 @@ def _user_prompt(messages: list[ModelMessage]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# session_id_for
-# ---------------------------------------------------------------------------
-
-
-def test_session_id_for_deterministic() -> None:
-    """The same video id yields the same session id across many calls."""
-    assert len({session_id_for("abc123") for _ in range(100)}) == 1
-
-
-def test_session_id_for_format() -> None:
-    """The session id is ``ses_`` plus exactly 32 lowercase hex characters."""
-    session_id = session_id_for("abc123")
-    assert session_id.startswith("ses_")
-    suffix = session_id[len("ses_") :]
-    assert len(suffix) == 32
-    assert all(char in "0123456789abcdef" for char in suffix)
-
-
-# ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------
 
@@ -138,18 +118,18 @@ def test_takeaway_bullet_timestamp_must_be_non_negative() -> None:
 
 
 # ---------------------------------------------------------------------------
-# OpencodeGoAnalyzer: Agent runs against FunctionModel
+# OpenAIAnalyzer: Agent runs against FunctionModel
 # ---------------------------------------------------------------------------
 
 
-async def test_opencode_analyzer_returns_canned_takeaways() -> None:
+async def test_openai_analyzer_returns_canned_takeaways() -> None:
     """A valid canned JSON response is parsed into Takeaways."""
     payload = _valid_payload()
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
-    analyzer = OpencodeGoAnalyzer(_settings(), model=_function_model(respond))
+    analyzer = OpenAIAnalyzer(_settings(), model=_function_model(respond))
     result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
     assert isinstance(result, Takeaways)
@@ -158,7 +138,7 @@ async def test_opencode_analyzer_returns_canned_takeaways() -> None:
     assert result.items[0].bullets[0].timestamp_seconds == 0
 
 
-async def test_opencode_analyzer_retries_on_invalid_first_response() -> None:
+async def test_openai_analyzer_retries_on_invalid_first_response() -> None:
     """Invalid JSON on the first call is retried and the second call succeeds."""
     payload = _valid_payload()
     calls = {"count": 0}
@@ -169,14 +149,14 @@ async def test_opencode_analyzer_retries_on_invalid_first_response() -> None:
             return ModelResponse(parts=[TextPart(content="not json")])
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
-    analyzer = OpencodeGoAnalyzer(_settings(), model=_function_model(respond))
+    analyzer = OpenAIAnalyzer(_settings(), model=_function_model(respond))
     result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
     assert calls["count"] == 2
     assert len(result.items) == 3
 
 
-async def test_opencode_analyzer_times_out() -> None:
+async def test_openai_analyzer_times_out() -> None:
     """A slow model call is cut off by llm_timeout_seconds."""
     payload = _valid_payload()
 
@@ -186,14 +166,14 @@ async def test_opencode_analyzer_times_out() -> None:
         await asyncio.sleep(0.5)
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
-    analyzer = OpencodeGoAnalyzer(
+    analyzer = OpenAIAnalyzer(
         _settings(llm_timeout_seconds=0.1), model=_function_model(respond)
     )
     with pytest.raises(TimeoutError):
         await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
 
-async def test_opencode_analyzer_truncates_oversized_transcript(
+async def test_openai_analyzer_truncates_oversized_transcript(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A transcript over the cap is truncated before it reaches the model."""
@@ -204,7 +184,7 @@ async def test_opencode_analyzer_truncates_oversized_transcript(
         seen["prompt"] = _user_prompt(messages)
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
-    analyzer = OpencodeGoAnalyzer(
+    analyzer = OpenAIAnalyzer(
         _settings(llm_max_input_chars=100), model=_function_model(respond)
     )
     with caplog.at_level(logging.WARNING):
@@ -214,14 +194,14 @@ async def test_opencode_analyzer_truncates_oversized_transcript(
     assert any("truncating" in record.message for record in caplog.records)
 
 
-async def test_opencode_analyzer_caps_bullets() -> None:
+async def test_openai_analyzer_caps_bullets() -> None:
     """More bullets than the config cap are sliced down per item."""
     payload = _valid_payload(bullets_per_item=4)
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
-    analyzer = OpencodeGoAnalyzer(
+    analyzer = OpenAIAnalyzer(
         _settings(takeaway_max_bullets=2), model=_function_model(respond)
     )
     result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
@@ -230,27 +210,27 @@ async def test_opencode_analyzer_caps_bullets() -> None:
 
 
 # ---------------------------------------------------------------------------
-# OpencodeGoAnalyzer: client construction
+# OpenAIAnalyzer: client construction
 # ---------------------------------------------------------------------------
 
 
-async def test_opencode_analyzer_build_client_sets_required_headers() -> None:
-    """The client carries the bearer token and the opencode session header."""
-    analyzer = OpencodeGoAnalyzer(_settings())
+async def test_openai_analyzer_build_client_sets_bearer_token() -> None:
+    """The client carries the API key for the bearer token header."""
+    analyzer = OpenAIAnalyzer(_settings())
     client = analyzer._build_client()
     try:
-        headers = client.default_headers
-        assert headers["Authorization"] == "Bearer test-key"
-        session_header = headers["x-opencode-session"]
-        assert isinstance(session_header, str)
-        assert session_header.startswith("ses_")
+        # The OpenAI SDK exposes api_key on the client; the Authorization
+        # header is built lazily from it on each request, so checking the
+        # attribute is the most direct evidence that the credential made it
+        # onto the client.
+        assert client.api_key == "test-key"
     finally:
         await client.close()
 
 
-def test_opencode_analyzer_requires_api_key() -> None:
+def test_openai_analyzer_requires_api_key() -> None:
     """Building the client without an API key raises ValueError."""
-    analyzer = OpencodeGoAnalyzer(_settings(opencode_api_key=None))
+    analyzer = OpenAIAnalyzer(_settings(openai_api_key=None))
     with pytest.raises(ValueError):
         analyzer._build_client()
 

@@ -35,7 +35,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-import anthropic
+import openai
 import httpx2
 from fastapi import FastAPI
 from pydantic import ValidationError
@@ -46,7 +46,7 @@ from tldw.config import Settings
 from tldw.discord import build_takeaway_embeds, format_message
 from tldw.discord import send as discord_send
 from tldw.discord import send_embeds as discord_send_embeds
-from tldw.llm import OpencodeGoAnalyzer, TakeawayAnalyzer, Takeaways, snap_timestamps
+from tldw.llm import OpenAIAnalyzer, TakeawayAnalyzer, Takeaways, snap_timestamps
 from tldw.queue import QueueRecord, QueueStore, TerminalState
 from tldw.transcript import (
     Cue,
@@ -88,7 +88,7 @@ AnalyzeFn = Callable[[str, str, str], Awaitable[Takeaways]]
 
 def _default_analyze_factory(settings: Settings) -> AnalyzeFn:
     """Build the production analyzer from settings. Returns a closure."""
-    analyzer: TakeawayAnalyzer = OpencodeGoAnalyzer(settings)
+    analyzer: TakeawayAnalyzer = OpenAIAnalyzer(settings)
 
     async def _analyze(rendered: str, video_id: str, title: str) -> Takeaways:
         return await analyzer.analyze(rendered, video_id=video_id, title=title)
@@ -225,7 +225,7 @@ async def _process_record(
     only on a RATE_LIMITED outcome and reset to zero on any other outcome,
     which is what makes the give-up budget mean "consecutive 429s".
 
-    When ``opencode_api_key`` is set the happy path runs the LLM analyzer and
+    When ``openai_api_key`` is set the happy path runs the LLM analyzer and
     posts takeaway embeds. A missing key, an empty transcript, or an LLM
     failure falls back to the plain text digest. An LLM failure is not a probe,
     so it never bumps ``attempts``.
@@ -347,7 +347,7 @@ async def _process_record(
     # Try the LLM takeaway path when configured, then fall back to the plain
     # digest for a missing key, an empty transcript, or any LLM failure.
     try:
-        if settings.opencode_api_key:
+        if settings.openai_api_key:
             cues = _parse_cues_for_llm(path)
             rendered = render_transcript_for_llm(cues)
             if not rendered.strip():
@@ -367,12 +367,12 @@ async def _process_record(
             except (
                 TimeoutError,
                 ValidationError,
-                anthropic.APIError,
-                anthropic.APIConnectionError,
+                openai.APIError,
+                openai.APIConnectionError,
                 pydantic_ai.exceptions.UnexpectedModelBehavior,
             ) as exc:
                 # APIConnectionError is an APIError subclass; listing both is
-                # explicit about the failures we expect from the gateway.
+                # explicit about the failures we expect from the OpenAI API.
                 logger.warning(
                     "LLM analysis failed for %s, falling back to plain digest: %s",
                     record.video_id,

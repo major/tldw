@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14"
 
 [[package]]
@@ -1940,10 +1940,10 @@ name = "tldw"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "anthropic" },
     { name = "curl-cffi" },
     { name = "fastapi" },
     { name = "httpx2" },
+    { name = "openai" },
     { name = "pydantic-ai" },
     { name = "pydantic-settings" },
     { name = "uvicorn" },
@@ -1961,10 +1961,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=1.12,<2" },
     { name = "curl-cffi", specifier = ">=0.13,<1" },
     { name = "fastapi", specifier = ">=0.110,<1" },
     { name = "httpx2", specifier = ">=2.13.1,<3" },
+    { name = "openai", specifier = ">=3.19,<4" },
     { name = "pydantic-ai", specifier = ">=2.54" },
     { name = "pydantic-settings", specifier = ">=2.5,<3" },
     { name = "uvicorn", specifier = ">=0.30,<1" },

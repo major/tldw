@@ -258,7 +258,7 @@ class FakeTranscribe:
         self.raises = raises
         self._order = order
 
-    async def __call__(self, path: Path) -> str:
+    async def __call__(self, path: Path, **_kwargs: Any) -> str:
         self.call_count += 1
         self.last_path = path
         if self._order is not None:

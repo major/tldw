@@ -138,8 +138,13 @@ class Settings(BaseSettings):
 
     # OpenAI speech-to-text. ``gpt-transcribe`` is the current model; the
     # ``gpt-4o-transcribe`` family is deprecated and shuts down 2027-02-26.
+    #
+    # The ASR language is hardcoded to ``en`` in ``transcribe.py`` - no
+    # setting here can change that. ``transcribe_keywords`` carries the
+    # optional deployment-side vocabulary hint forwarded as the
+    # ``keywords`` request field (per OpenAI's transcription docs).
     transcribe_model: str = "gpt-transcribe"
-    transcribe_langs: list[str] = Field(default_factory=lambda: ["en"])
+    transcribe_keywords: list[str] = Field(default_factory=list)
     transcribe_timeout_seconds: float = Field(default=600.0, gt=0)
 
     # Shorts filter. When false (the default), notify drops every entry whose

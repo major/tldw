@@ -58,7 +58,7 @@ from tldw.discord import send as discord_send
 from tldw.discord import send_embeds as discord_send_embeds
 from tldw.llm import OpenAIAnalyzer, TakeawayAnalyzer, Takeaways
 from tldw.queue import QueueRecord, QueueStore, TerminalState
-from tldw.transcribe import TranscribeError, transcribe
+from tldw.transcribe import TranscribeError, build_prompt, transcribe
 
 __all__ = ["transcript_loop"]
 
@@ -87,8 +87,11 @@ DownloadAudioFn = Callable[..., DownloadResult]
 """Signature mirrors the real download; the real call is kwarg-only, tests inject the same shape."""
 CompressAudioFn = Callable[..., Path]
 """Signature mirrors the real compress; the real call is kwarg-only, tests inject the same shape."""
-TranscribeFn = Callable[[Path], Awaitable[str]]
-"""Signature: (audio_path) -> transcript text."""
+TranscribeFn = Callable[..., Awaitable[str]]
+"""Signature: (audio_path, **context) -> transcript text. The keyword
+context lets the caller pass ``title`` and ``channel_name`` so the
+transcription prompt can be built from the entry metadata. Tests inject
+fakes via the same shape."""
 
 
 def _default_analyze_factory(settings: Settings) -> AnalyzeFn:
@@ -115,14 +118,21 @@ def _default_compress_audio() -> CompressAudioFn:
 def _default_transcribe_factory(settings: Settings) -> TranscribeFn:
     """Bind transcribe() with settings; the worker injects the seam."""
 
-    async def _transcribe(path: Path) -> str:
+    async def _transcribe(
+        path: Path,
+        *,
+        title: str | None = None,
+        channel_name: str | None = None,
+    ) -> str:
+        prompt = build_prompt(title=title, channel_name=channel_name)
         return await transcribe(
             path,
             model=settings.transcribe_model,
-            langs=settings.transcribe_langs,
             api_key=settings.openai_api_key or "",
             base_url=settings.openai_base_url,
             timeout_s=settings.transcribe_timeout_seconds,
+            prompt=prompt,
+            keywords=settings.transcribe_keywords or None,
         )
 
     return _transcribe
@@ -580,7 +590,11 @@ async def _transcribe_stage(
     with ``transcript_path`` set so a crash resumes at the LLM stage.
     """
     try:
-        text = await transcribe(compressed)
+        text = await transcribe(
+            compressed,
+            title=record.title,
+            channel_name=record.channel_name,
+        )
     except TranscribeError as exc:
         status = exc.status_code
         if status is not None and 400 <= status < 500 and status != 429:

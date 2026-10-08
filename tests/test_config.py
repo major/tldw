@@ -305,7 +305,7 @@ def test_audio_settings_defaults(settings_kwargs: Callable[..., dict[str, Any]])
     assert settings.audio_bitrate == "32k"
     assert settings.ffmpeg_timeout_seconds == 900.0
     assert settings.transcribe_model == "gpt-transcribe"
-    assert settings.transcribe_langs == ["en"]
+    assert settings.transcribe_keywords == []
     assert settings.transcribe_timeout_seconds == 600.0
 
 
@@ -321,7 +321,7 @@ def test_audio_settings_read_from_env(
     monkeypatch.setenv("TLDW_AUDIO_BITRATE", "48k")
     monkeypatch.setenv("TLDW_FFMPEG_TIMEOUT_SECONDS", "300")
     monkeypatch.setenv("TLDW_TRANSCRIBE_MODEL", "gpt-transcribe")
-    monkeypatch.setenv("TLDW_TRANSCRIBE_LANGS", '["en","es"]')
+    monkeypatch.setenv("TLDW_TRANSCRIBE_KEYWORDS", '["officer","DUI"]')
     monkeypatch.setenv("TLDW_TRANSCRIBE_TIMEOUT_SECONDS", "120")
 
     # Act
@@ -334,7 +334,7 @@ def test_audio_settings_read_from_env(
     assert settings.audio_bitrate == "48k"
     assert settings.ffmpeg_timeout_seconds == 300.0
     assert settings.transcribe_model == "gpt-transcribe"
-    assert settings.transcribe_langs == ["en", "es"]
+    assert settings.transcribe_keywords == ["officer", "DUI"]
     assert settings.transcribe_timeout_seconds == 120.0
 
 

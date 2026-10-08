@@ -14,7 +14,6 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -29,6 +28,7 @@ from pydantic_ai.messages import (  # noqa: E402
 )
 from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel  # noqa: E402
 
+from helpers import make_settings  # noqa: E402
 from tldw.config import Settings  # noqa: E402
 from tldw.llm import (  # noqa: E402
     SYSTEM_PROMPT,
@@ -39,13 +39,6 @@ from tldw.llm import (  # noqa: E402
     Takeaways,
     snap_timestamps,
 )
-
-
-def _settings(**overrides: Any) -> Settings:
-    """Build Settings with an API key so the analyzer is enabled by default."""
-    values: dict[str, Any] = {"openai_api_key": "test-key"}
-    values.update(overrides)
-    return Settings(**values)
 
 
 def _takeaway(index: int = 0, *, bullet_count: int = 1) -> Takeaway:
@@ -130,7 +123,7 @@ async def test_openai_analyzer_returns_canned_takeaways() -> None:
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
-    analyzer = OpenAIAnalyzer(_settings(), model=_function_model(respond))
+    analyzer = OpenAIAnalyzer(make_settings(openai_api_key="test-key"), model=_function_model(respond))
     result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
     assert isinstance(result, Takeaways)
@@ -150,7 +143,7 @@ async def test_openai_analyzer_retries_on_invalid_first_response() -> None:
             return ModelResponse(parts=[TextPart(content="not json")])
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
-    analyzer = OpenAIAnalyzer(_settings(), model=_function_model(respond))
+    analyzer = OpenAIAnalyzer(make_settings(openai_api_key="test-key"), model=_function_model(respond))
     result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
     assert calls["count"] == 2
@@ -168,7 +161,7 @@ async def test_openai_analyzer_times_out() -> None:
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
     analyzer = OpenAIAnalyzer(
-        _settings(llm_timeout_seconds=0.1), model=_function_model(respond)
+        make_settings(openai_api_key="test-key", llm_timeout_seconds=0.1), model=_function_model(respond)
     )
     with pytest.raises(TimeoutError):
         await analyzer.analyze("transcript", video_id="vid1", title="Title")
@@ -186,7 +179,7 @@ async def test_openai_analyzer_truncates_oversized_transcript(
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
     analyzer = OpenAIAnalyzer(
-        _settings(llm_max_input_chars=100), model=_function_model(respond)
+        make_settings(openai_api_key="test-key", llm_max_input_chars=100), model=_function_model(respond)
     )
     with caplog.at_level(logging.WARNING):
         await analyzer.analyze("x" * 500, video_id="vid1", title="Title")
@@ -203,7 +196,7 @@ async def test_openai_analyzer_caps_bullets() -> None:
         return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
 
     analyzer = OpenAIAnalyzer(
-        _settings(takeaway_max_bullets=2), model=_function_model(respond)
+        make_settings(openai_api_key="test-key", takeaway_max_bullets=2), model=_function_model(respond)
     )
     result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
@@ -217,7 +210,7 @@ async def test_openai_analyzer_caps_bullets() -> None:
 
 async def test_openai_analyzer_build_client_sets_bearer_token() -> None:
     """The client carries the API key for the bearer token header."""
-    analyzer = OpenAIAnalyzer(_settings())
+    analyzer = OpenAIAnalyzer(make_settings(openai_api_key="test-key"))
     client = analyzer._build_client()
     try:
         # The OpenAI SDK exposes api_key on the client; the Authorization
@@ -231,7 +224,7 @@ async def test_openai_analyzer_build_client_sets_bearer_token() -> None:
 
 def test_openai_analyzer_requires_api_key() -> None:
     """Building the client without an API key raises ValueError."""
-    analyzer = OpenAIAnalyzer(_settings(openai_api_key=None))
+    analyzer = OpenAIAnalyzer(make_settings(openai_api_key=None))
     with pytest.raises(ValueError):
         analyzer._build_client()
 

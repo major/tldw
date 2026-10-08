@@ -34,3 +34,22 @@ def make_video_entry(
     }
     defaults.update(overrides)
     return VideoEntry(**defaults)  # type: ignore[arg-type]
+
+
+def make_settings(tmp_path: Path | None = None, **overrides: Any) -> Settings:
+    """Build Settings with safe defaults for the tldw test suite.
+
+    When ``tmp_path`` is provided, ``queue_file`` and ``transcript_dir`` are
+    placed under it so tests do not touch real on-disk state. When it is
+    omitted, the caller is expected to override any path fields they need
+    (used by the llm tests that never touch disk).
+    """
+    defaults: dict[str, Any] = {
+        "callback_url": "https://cb.example/pubsub/callback",
+        "channel_ids_file": Path("/nonexistent.json"),
+    }
+    if tmp_path is not None:
+        defaults["transcript_dir"] = tmp_path / "transcripts"
+        defaults["queue_file"] = tmp_path / "queue.sqlite3"
+    defaults.update(overrides)
+    return Settings(**defaults)

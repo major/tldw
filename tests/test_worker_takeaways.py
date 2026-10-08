@@ -22,7 +22,7 @@ import pydantic_ai.exceptions
 import pytest
 from pydantic import ValidationError
 
-from helpers import make_video_entry
+from helpers import make_settings, make_video_entry
 from tldw.audio import DownloadResult
 from tldw.config import Settings
 from tldw.llm import OpenAIAnalyzer, Takeaways
@@ -30,20 +30,6 @@ from tldw.queue import QueueRecord, QueueStore
 from tldw.worker import _process_record_audio
 
 _VIDEO_ID = "dQw4w9WgXcQ"
-
-
-def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
-    """Build Settings with the transcript pipeline and an API key configured."""
-    defaults: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": Path("/nonexistent.json"),
-        "discord_webhook_url": "https://discord.com/api/webhooks/x/y",
-        "transcript_dir": tmp_path / "transcripts",
-        "queue_file": tmp_path / "queue.sqlite3",
-        "openai_api_key": "test-key",
-    }
-    defaults.update(overrides)
-    return Settings(**defaults)
 
 
 def _write_txt(tmp_path: Path, video_id: str) -> Path:
@@ -216,7 +202,11 @@ async def test_llm_success_sends_embeds_and_marks_done(
 ) -> None:
     """A successful analysis posts three embeds and marks DONE with llm_embeds."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
     _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
@@ -254,7 +244,11 @@ async def test_no_api_key_skips_analysis_and_sends_plain(
 ) -> None:
     """Without an API key the analyzer never runs and the plain digest is sent."""
     # Arrange
-    settings = _make_settings(tmp_path, openai_api_key=None)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key=None,
+    )
     now = 1000.0
     _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
@@ -286,7 +280,11 @@ async def test_empty_transcript_skips_analysis_and_sends_plain(
 ) -> None:
     """An empty transcript skips the LLM and sends the plain digest."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
     path = _write_empty_txt(tmp_path, _VIDEO_ID)
     _enqueue_with_path(queue_store, path, _VIDEO_ID, now)
@@ -356,7 +354,11 @@ async def test_llm_failure_falls_back_to_plain_digest(
 ) -> None:
     """A timeout, validation, API, or unexpected-model error falls back without bumping attempts."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
     _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
@@ -436,7 +438,11 @@ async def test_takeaways_without_timestamps_render_plain(
 ) -> None:
     """Audio-backend takeaways render plain bullet lines, not deep links."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
     _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()

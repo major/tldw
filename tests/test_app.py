@@ -19,39 +19,18 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
-from typing import Any
 from urllib.parse import parse_qs
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from helpers import make_video_entry
+from helpers import make_settings, make_video_entry
 from tldw import _version
 from tldw.app import _renewal_loop, create_app, renewal_delay
 from tldw.config import Settings
 from tldw.feed import VideoEntry
 from tldw.queue import TerminalState, open_store
-
-
-def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
-    """Build Settings with tmp_path queue/transcript paths and safe defaults."""
-    # channel_ids_file carries an alias, so pass kwargs through a mapping the
-    # way test_config.py does. That keeps the field name readable here without
-    # tripping the type checker on the aliased constructor parameter.
-    defaults: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": Path("/nonexistent.json"),
-        "queue_file": tmp_path / "queue.sqlite3",
-        "transcript_dir": tmp_path / "transcripts",
-        "audio_dir": tmp_path / "audio",
-        # The audio path always needs an OpenAI key to start the worker. The
-        # worker is still covered by tests/test_worker_audio.py; the lifespan
-        # tests only check that the task is created and cancelled.
-        "openai_api_key": "sk-test",
-    }
-    defaults.update(overrides)
-    return Settings(**defaults)
 
 
 def _read_titles(queue_file: Path) -> set[str]:
@@ -66,7 +45,7 @@ def _read_titles(queue_file: Path) -> set[str]:
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     """Build Settings pointing at a channels file that does not exist."""
-    return _make_settings(tmp_path)
+    return make_settings(tmp_path)
 
 
 @pytest.fixture
@@ -249,13 +228,13 @@ def _sign(body: bytes, secret: str = _HMAC_SECRET) -> str:
 @pytest.fixture
 def settings_with_secret(tmp_path: Path) -> Settings:
     """Settings configured with an HMAC secret."""
-    return _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    return make_settings(tmp_path, hub_secret=_HMAC_SECRET)
 
 
 @pytest.fixture
 def settings_without_secret(tmp_path: Path) -> Settings:
     """Settings with hub_secret=None (the default)."""
-    return _make_settings(tmp_path)
+    return make_settings(tmp_path)
 
 
 @pytest.fixture
@@ -475,7 +454,7 @@ def channels_file(tmp_path: Path) -> Path:
 @pytest.fixture
 def settings_with_channels(tmp_path: Path, channels_file: Path) -> Settings:
     """Settings with a callback URL, two channels, and an HMAC secret."""
-    return _make_settings(
+    return make_settings(
         tmp_path, channel_ids_file=channels_file, hub_secret="topsecret"
     )
 
@@ -483,7 +462,7 @@ def settings_with_channels(tmp_path: Path, channels_file: Path) -> Settings:
 @pytest.fixture
 def settings_without_callback(tmp_path: Path, channels_file: Path) -> Settings:
     """Settings with channels but no callback URL."""
-    return _make_settings(
+    return make_settings(
         tmp_path,
         channel_ids_file=channels_file,
         hub_secret=None,
@@ -502,7 +481,7 @@ def empty_channels_file(tmp_path: Path) -> Path:
 @pytest.fixture
 def settings_empty_channels(tmp_path: Path, empty_channels_file: Path) -> Settings:
     """Settings with a callback URL but an empty channel list."""
-    return _make_settings(tmp_path, channel_ids_file=empty_channels_file)
+    return make_settings(tmp_path, channel_ids_file=empty_channels_file)
 
 
 @pytest.fixture
@@ -873,7 +852,7 @@ def test_lifespan_cancels_renewal_task_on_shutdown(
 def test_lifespan_opens_queue_store(tmp_path: Path) -> None:
     """The lifespan opens the queue store and the database file exists."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(tmp_path)
     app = create_app(settings)
 
     # Act
@@ -889,7 +868,7 @@ def test_lifespan_creates_transcript_dir(tmp_path: Path) -> None:
     """The lifespan creates the transcript directory at startup."""
     # Arrange
     transcript_dir = tmp_path / "tx"
-    settings = _make_settings(tmp_path, transcript_dir=transcript_dir)
+    settings = make_settings(tmp_path, transcript_dir=transcript_dir)
     app = create_app(settings)
 
     # Act
@@ -904,8 +883,11 @@ def test_lifespan_creates_transcript_dir(tmp_path: Path) -> None:
 def test_lifespan_starts_transcript_task(tmp_path: Path) -> None:
     """A configured webhook and queue start the transcript worker task."""
     # Arrange
-    settings = _make_settings(
-        tmp_path, discord_webhook_url="https://discord.com/api/webhooks/x/y"
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
     )
     app = create_app(settings)
 
@@ -919,7 +901,7 @@ def test_lifespan_starts_transcript_task(tmp_path: Path) -> None:
 def test_lifespan_skips_transcript_task_without_webhook(tmp_path: Path) -> None:
     """Without a webhook URL there is nothing to send, so no worker task."""
     # Arrange
-    settings = _make_settings(tmp_path, discord_webhook_url=None)
+    settings = make_settings(tmp_path, discord_webhook_url=None)
     app = create_app(settings)
 
     # Act
@@ -931,8 +913,11 @@ def test_lifespan_skips_transcript_task_without_webhook(tmp_path: Path) -> None:
 def test_lifespan_cancels_transcript_task_on_shutdown(tmp_path: Path) -> None:
     """The lifespan cancels the transcript worker task on shutdown."""
     # Arrange
-    settings = _make_settings(
-        tmp_path, discord_webhook_url="https://discord.com/api/webhooks/x/y"
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
     )
     app = create_app(settings)
 
@@ -947,7 +932,7 @@ def test_lifespan_cancels_transcript_task_on_shutdown(tmp_path: Path) -> None:
 def test_lifespan_closes_queue_on_shutdown(tmp_path: Path) -> None:
     """The lifespan closes the queue store on shutdown."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(tmp_path)
     app = create_app(settings)
 
     # Act
@@ -970,7 +955,7 @@ def test_lifespan_survives_queue_store_open_failure(
     # makes open_store raise during startup.
     blocking_file = tmp_path / "blocking-file"
     blocking_file.write_text("not a directory", encoding="utf-8")
-    settings = _make_settings(
+    settings = make_settings(
         tmp_path, queue_file=blocking_file / "queue.sqlite3"
     )
     app = create_app(settings)
@@ -998,7 +983,7 @@ def test_notify_enqueues_entries_into_queue_store(
 ) -> None:
     """A signed delivery enqueues every entry into the queue store."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
 
@@ -1027,7 +1012,7 @@ def test_notify_duplicate_delivery_enqueues_once(
 ) -> None:
     """The same delivery twice still inserts one row per video."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
 
@@ -1057,7 +1042,7 @@ def test_notify_enqueue_failure_still_returns_200(
 ) -> None:
     """A queue failure is logged but the delivery still returns 200."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
 
@@ -1088,7 +1073,7 @@ def test_notify_does_not_enqueue_when_store_unavailable(
 ) -> None:
     """With no queue store the delivery still prints and returns 200."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     # Bypass the lifespan: TestClient without the context manager does not run
     # it, so the manual None survives and no store is opened.
@@ -1118,7 +1103,7 @@ def test_notify_duplicate_delivery_prints_once(
 ) -> None:
     """A repeated delivery prints each video once instead of on every delivery."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
 
@@ -1149,7 +1134,7 @@ def test_notify_duplicate_delivery_logs_body_details(
 ) -> None:
     """A duplicate delivery logs an INFO line with the size, hash, and preview."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
     expected_hash = hashlib.sha256(multi_entry_payload).hexdigest()
@@ -1187,7 +1172,7 @@ def test_notify_first_delivery_logs_no_duplicate(
 ) -> None:
     """The first delivery is new, so no duplicate log line is emitted."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     headers = {"X-Hub-Signature": _sign(multi_entry_payload)}
 
@@ -1213,7 +1198,7 @@ def test_notify_without_store_prints_every_delivery(
 ) -> None:
     """With no queue store there is no dedup, so every line prints and no log."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     # Bypass the lifespan: TestClient without the context manager does not run
     # it, so the manual None survives and no store is opened.
@@ -1242,8 +1227,11 @@ def test_notify_without_store_prints_every_delivery(
 def test_queue_endpoint_returns_counts_json(tmp_path: Path) -> None:
     """GET /queue reports counts grouped by state."""
     # Arrange
-    settings = _make_settings(
-        tmp_path, discord_webhook_url="https://discord.com/api/webhooks/x/y"
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
     )
     app = create_app(settings)
 
@@ -1262,7 +1250,7 @@ def test_queue_endpoint_returns_counts_json(tmp_path: Path) -> None:
 def test_queue_endpoint_returns_503_when_store_unavailable(tmp_path: Path) -> None:
     """GET /queue returns 503 when the store failed to open."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(tmp_path)
     app = create_app(settings)
     app.state.queue = None
     client = TestClient(app)
@@ -1281,7 +1269,7 @@ def test_queue_endpoint_uses_lifespan_store(
 ) -> None:
     """GET /queue reads the store the lifespan opened."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(tmp_path)
     app = create_app(settings)
 
     # Act
@@ -1332,7 +1320,7 @@ def test_notify_drops_shorts_by_default(
 ) -> None:
     """Without TLDW_INCLUDE_SHORTS the shorts URL is neither printed nor enqueued."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     payload = _mixed_shorts_payload()
     headers = {"X-Hub-Signature": _sign(payload)}
@@ -1363,7 +1351,7 @@ def test_notify_keeps_shorts_when_opted_in(
 ) -> None:
     """With TLDW_INCLUDE_SHORTS both shorts and full-length videos are processed."""
     # Arrange
-    settings = _make_settings(
+    settings = make_settings(
         tmp_path, hub_secret=_HMAC_SECRET, include_shorts=True
     )
     app = create_app(settings)
@@ -1395,7 +1383,7 @@ def test_notify_real_payload_drops_shorts_by_default(
 ) -> None:
     """The captured feed has 4 shorts and 11 long videos; shorts are filtered by default."""
     # Arrange
-    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    settings = make_settings(tmp_path, hub_secret=_HMAC_SECRET)
     app = create_app(settings)
     headers = {"X-Hub-Signature": _sign(real_atom_payload)}
 

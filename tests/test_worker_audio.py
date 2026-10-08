@@ -21,7 +21,7 @@ import httpx2
 import pytest
 from fastapi import FastAPI
 
-from helpers import make_video_entry
+from helpers import make_settings, make_video_entry
 from tldw import worker
 from tldw.audio import CompressError, DownloadResult, ProbeState
 from tldw.config import Settings
@@ -41,21 +41,6 @@ _VIDEO_ID = "dQw4w9WgXcQ"
 # ---------------------------------------------------------------------------
 # Fixtures and builders
 # ---------------------------------------------------------------------------
-
-
-def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
-    """Build Settings with the audio pipeline configured under ``tmp_path``."""
-    defaults: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": Path("/nonexistent.json"),
-        "discord_webhook_url": "https://discord.com/api/webhooks/x/y",
-        "transcript_dir": tmp_path / "transcripts",
-        "audio_dir": tmp_path / "audio",
-        "queue_file": tmp_path / "queue.sqlite3",
-        "openai_api_key": "sk-test",
-    }
-    defaults.update(overrides)
-    return Settings(**defaults)
 
 
 def _make_app(settings: Settings, queue_store: QueueStore) -> FastAPI:
@@ -387,7 +372,12 @@ async def test_process_record_audio_happy_path_calls_every_stage_in_order(
 ) -> None:
     """The happy path runs download, compress, transcribe, analyze, embeds."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     order: list[str] = []
@@ -432,7 +422,12 @@ async def test_process_record_audio_skips_download_when_audio_path_cached(
 ) -> None:
     """A cached audio_path skips download and compress but still transcribes."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     cached = tmp_path / "audio" / f"{_VIDEO_ID}.compressed.webm"
     cached.parent.mkdir(parents=True, exist_ok=True)
@@ -478,7 +473,12 @@ async def test_process_record_audio_re_downloads_when_cached_audio_path_missing(
     feed transcribe a vanished path on every retry.
     """
     # Arrange: enqueue a row whose audio_path points at a file we never create.
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     stale = tmp_path / "audio" / f"{_VIDEO_ID}.compressed.webm"
     stale.parent.mkdir(parents=True, exist_ok=True)
@@ -519,7 +519,12 @@ async def test_process_record_audio_skips_download_and_compress_when_transcript_
 ) -> None:
     """A cached transcript_path skips download, compress, and transcribe."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     txt = tmp_path / "transcripts" / f"{_VIDEO_ID}.txt"
     txt.parent.mkdir(parents=True, exist_ok=True)
@@ -563,7 +568,12 @@ async def test_process_record_audio_classifies_429_as_rate_limited_and_streaks(
 ) -> None:
     """A RATE_LIMITED download bumps the streak and uses the 300s base."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -598,7 +608,12 @@ async def test_process_record_audio_unavailable_marks_give_up(
 ) -> None:
     """An UNAVAILABLE download is permanent and marks the record terminal."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -627,7 +642,12 @@ async def test_process_record_audio_not_ready_reschedules_with_poll_backoff(
 ) -> None:
     """A NOT_READY download re-arms with the poll base and resets the streak."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload([DownloadResult(ProbeState.NOT_READY, None, None)])
@@ -665,7 +685,12 @@ async def test_process_record_audio_compress_error_reschedules_with_300s_backoff
 ) -> None:
     """A CompressError reschedules with the 300 second base."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -699,7 +724,12 @@ async def test_process_record_audio_compress_error_does_not_set_audio_path(
 ) -> None:
     """A failed compress leaves audio_path unset so the next pass re-downloads."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -733,7 +763,12 @@ async def test_process_record_audio_4xx_api_error_marks_give_up_audio(
 ) -> None:
     """A permanent 4xx transcription error marks GIVE_UP_AUDIO."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -763,7 +798,12 @@ async def test_process_record_audio_429_api_error_reschedules_with_audio_path_pr
 ) -> None:
     """A 429 transcription error reschedules and keeps the compressed audio."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -805,7 +845,12 @@ async def test_process_record_audio_empty_transcript_marks_done_with_detail_empt
 ) -> None:
     """An empty transcript sends the plain digest with the empty_transcript marker."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -843,7 +888,12 @@ async def test_process_record_audio_writes_transcript_txt_and_persists_transcrip
 ) -> None:
     """The transcript is written to a .txt and its path is persisted."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -874,7 +924,12 @@ async def test_process_record_audio_deletes_compressed_audio_after_transcription
 ) -> None:
     """The compressed audio is deleted once the .txt transcript is written."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     now = 1000.0
     _enqueue(queue_store, now)
     download = FakeDownload(
@@ -911,7 +966,13 @@ async def test_process_record_audio_48h_give_up_short_circuits_before_download(
 ) -> None:
     """A record past the give-up window is retired without a download."""
     # Arrange
-    settings = _make_settings(tmp_path, giveup_seconds=0.0)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+        giveup_seconds=0.0,
+    )
     now = 1000.0
     queue_store.enqueue(make_video_entry(), now=now - 1)
     download = FakeDownload(
@@ -942,8 +1003,13 @@ async def test_process_record_audio_uses_audio_settings_for_dest_dir_and_format(
     """The download dest dir and compress output come from the audio settings."""
     # Arrange
     custom_dir = tmp_path / "custom-audio"
-    settings = _make_settings(
-        tmp_path, audio_dir=custom_dir, audio_format="mp3", audio_bitrate="24k"
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="sk-test",
+        audio_dir=custom_dir,
+        audio_format="mp3",
+        audio_bitrate="24k",
     )
     now = 1000.0
     _enqueue(queue_store, now)
@@ -981,7 +1047,12 @@ async def test_transcript_loop_requires_openai_api_key(
 ) -> None:
     """The worker returns before any work when the OpenAI key is missing."""
     # Arrange
-    settings = _make_settings(tmp_path, openai_api_key=None)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key=None,
+    )
     app = _make_app(settings, queue_store)
 
     async def fake_audio(*args: object, **kwargs: object) -> None:
@@ -1003,7 +1074,12 @@ async def test_transcript_loop_respects_enqueue_delay(
 ) -> None:
     """A record enqueued with a delay is not downloaded until the delay elapses."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        audio_dir=tmp_path / "audio",
+        openai_api_key="sk-test",
+    )
     app = _make_app(settings, queue_store)
     now = time.time()
     queue_store.enqueue(make_video_entry("v1"), now=now, delay_seconds=300.0)

@@ -401,7 +401,7 @@ async def _process_record(
                 "handing off to LLM: video=%s model=%s max_output_tokens=%d "
                 "transcript_chars=%d",
                 record.video_id,
-                settings.opencode_model,
+                settings.openai_model,
                 settings.llm_max_output_tokens,
                 len(rendered),
             )

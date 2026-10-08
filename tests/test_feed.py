@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from tldw.feed import parse_atom
+from tldw.feed import is_short_url, parse_atom
 
 _ATOM = "http://www.w3.org/2005/Atom"
 _YT = "http://www.youtube.com/xml/schemas/2015"
@@ -137,3 +137,57 @@ def test_malformed_xml_raises_parse_error() -> None:
     # Act / Assert
     with pytest.raises(ET.ParseError):
         parse_atom(payload)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param(
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ", id="desktop-shorts"
+        ),
+        pytest.param(
+            "https://m.youtube.com/shorts/dQw4w9WgXcQ", id="mobile-shorts"
+        ),
+        pytest.param(
+            "https://music.youtube.com/shorts/dQw4w9WgXcQ", id="music-shorts"
+        ),
+    ],
+)
+def test_is_short_url_recognizes_short_shapes(url: str) -> None:
+    """Every YouTube Shorts URL shape is detected as a short."""
+    # Arrange
+    # The parametrized list covers the desktop, mobile, and music subdomains.
+
+    # Act
+    result = is_short_url(url)
+
+    # Assert
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", id="desktop-watch"
+        ),
+        pytest.param(
+            "https://youtu.be/dQw4w9WgXcQ", id="youtu-be"
+        ),
+        pytest.param(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42", id="watch-with-t"
+        ),
+        pytest.param("", id="empty"),
+    ],
+)
+def test_is_short_url_rejects_non_shorts(url: str) -> None:
+    """Watch, share, and empty URLs are not shorts."""
+    # Arrange
+    # The parametrized list covers the canonical watch URL, the share form,
+    # a query-bearing watch URL, and an empty string.
+
+    # Act
+    result = is_short_url(url)
+
+    # Assert
+    assert result is False

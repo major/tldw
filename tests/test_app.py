@@ -1305,3 +1305,124 @@ def test_queue_endpoint_uses_lifespan_store(
     assert post.status_code == 200
     assert response.status_code == 200
     assert response.json() == {"pending": 2}
+
+
+# ---------------------------------------------------------------------------
+# Shorts filter: notify handler drops /shorts/ URLs unless opted in.
+# ---------------------------------------------------------------------------
+
+
+_SHORT_VIDEO_ID = "v_Short00000000001"
+_LONG_VIDEO_ID = "v_LongVid000000001"
+
+
+def _mixed_shorts_payload() -> bytes:
+    """Return a tiny Atom feed with one Short and one full-length video."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
+        "<entry>"
+        f"<yt:videoId>{_SHORT_VIDEO_ID}</yt:videoId>"
+        "<title>One Minute Short</title>"
+        f'<link rel="alternate" href="https://www.youtube.com/shorts/{_SHORT_VIDEO_ID}"/>'
+        "<author><name>Fixture Channel</name></author>"
+        "</entry>"
+        "<entry>"
+        f"<yt:videoId>{_LONG_VIDEO_ID}</yt:videoId>"
+        "<title>Long Form Video</title>"
+        f'<link rel="alternate" href="https://www.youtube.com/watch?v={_LONG_VIDEO_ID}"/>'
+        "<author><name>Fixture Channel</name></author>"
+        "</entry>"
+        "</feed>"
+    ).encode("utf-8")
+
+
+def test_notify_drops_shorts_by_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without TLDW_INCLUDE_SHORTS the shorts URL is neither printed nor enqueued."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    payload = _mixed_shorts_payload()
+    headers = {"X-Hub-Signature": _sign(payload)}
+
+    # Act
+    with TestClient(app) as client:
+        response = client.post(
+            "/pubsub/callback", content=payload, headers=headers
+        )
+
+    # Assert
+    assert response.status_code == 200
+    out = capsys.readouterr().out
+    assert "One Minute Short" not in out
+    assert "Long Form Video" in out
+    store = open_store(settings.queue_file)
+    try:
+        counts = store.counts()
+        assert counts == {"pending": 1}
+    finally:
+        store.close()
+    assert _read_titles(settings.queue_file) == {"Long Form Video"}
+
+
+def test_notify_keeps_shorts_when_opted_in(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With TLDW_INCLUDE_SHORTS both shorts and full-length videos are processed."""
+    # Arrange
+    settings = _make_settings(
+        tmp_path, hub_secret=_HMAC_SECRET, include_shorts=True
+    )
+    app = create_app(settings)
+    payload = _mixed_shorts_payload()
+    headers = {"X-Hub-Signature": _sign(payload)}
+
+    # Act
+    with TestClient(app) as client:
+        response = client.post(
+            "/pubsub/callback", content=payload, headers=headers
+        )
+
+    # Assert
+    assert response.status_code == 200
+    out = capsys.readouterr().out
+    assert "One Minute Short" in out
+    assert "Long Form Video" in out
+    store = open_store(settings.queue_file)
+    try:
+        assert store.counts() == {"pending": 2}
+    finally:
+        store.close()
+
+
+def test_notify_real_payload_drops_shorts_by_default(
+    tmp_path: Path,
+    real_atom_payload: bytes,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The captured feed has 4 shorts and 11 long videos; shorts are filtered by default."""
+    # Arrange
+    settings = _make_settings(tmp_path, hub_secret=_HMAC_SECRET)
+    app = create_app(settings)
+    headers = {"X-Hub-Signature": _sign(real_atom_payload)}
+
+    # Act
+    with TestClient(app) as client:
+        response = client.post(
+            "/pubsub/callback", content=real_atom_payload, headers=headers
+        )
+
+    # Assert
+    assert response.status_code == 200
+    out = capsys.readouterr().out
+    assert "/shorts/" not in out
+    store = open_store(settings.queue_file)
+    try:
+        assert store.counts() == {"pending": 11}
+    finally:
+        store.close()

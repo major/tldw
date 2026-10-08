@@ -22,29 +22,14 @@ import pydantic_ai.exceptions
 import pytest
 from pydantic import ValidationError
 
+from helpers import make_video_entry
 from tldw.audio import DownloadResult
 from tldw.config import Settings
-from tldw.feed import VideoEntry
 from tldw.llm import OpenAIAnalyzer, Takeaways
 from tldw.queue import QueueRecord, QueueStore, open_store
 from tldw.worker import _process_record_audio
 
 _VIDEO_ID = "dQw4w9WgXcQ"
-
-
-def _entry(video_id: str = _VIDEO_ID, **overrides: object) -> VideoEntry:
-    """Build a VideoEntry with sensible defaults for worker tests."""
-    defaults: dict[str, object] = {
-        "video_id": video_id,
-        "channel_id": "UC_x5XG1OV2P6uZZ5FSM9Ttw",
-        "title": f"Test {video_id}",
-        "url": f"https://www.youtube.com/watch?v={video_id}",
-        "channel_name": "Test Channel",
-        "published": None,
-        "updated": None,
-    }
-    defaults.update(overrides)
-    return VideoEntry(**defaults)  # type: ignore[arg-type]
 
 
 def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
@@ -87,7 +72,7 @@ def _enqueue_with_path(
     store: QueueStore, path: Path, video_id: str, now: float
 ) -> None:
     """Enqueue a record and pre-set its cached transcript path."""
-    store.enqueue(_entry(video_id), now=now)
+    store.enqueue(make_video_entry(video_id), now=now)
     store.mark_attempt(
         video_id, now=now, next_attempt_at=now, transcript_path=str(path)
     )

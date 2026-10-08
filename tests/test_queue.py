@@ -16,27 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from tldw.feed import VideoEntry
+from helpers import make_video_entry
 from tldw.queue import (
     QueueStore,
     TerminalState,
     open_store,
 )
-
-
-def _entry(video_id: str = "dQw4w9WgXcQ", **overrides: object) -> VideoEntry:
-    """Build a VideoEntry with sensible defaults for queue tests."""
-    defaults: dict[str, object] = {
-        "video_id": video_id,
-        "channel_id": "UC_x5XG1OV2P6uZZ5FSM9Ttw",
-        "title": f"Test {video_id}",
-        "url": f"https://www.youtube.com/watch?v={video_id}",
-        "channel_name": "Test Channel",
-        "published": None,
-        "updated": None,
-    }
-    defaults.update(overrides)
-    return VideoEntry(**defaults)  # type: ignore[arg-type]
 
 
 def _read_row(path: Path, video_id: str) -> sqlite3.Row:
@@ -102,7 +87,7 @@ def test_enqueue_returns_true_then_false_for_duplicate(tmp_path: Path) -> None:
     """The same video enqueued twice inserts once."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    entry = _entry()
+    entry = make_video_entry()
 
     # Act
     first = store.enqueue(entry, now=100.0)
@@ -118,7 +103,7 @@ def test_enqueue_persists_all_fields(tmp_path: Path) -> None:
     """A fresh record carries the entry fields and the initial queue values."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    entry = _entry("abc123", published="2026-01-01T00:00:00+00:00")
+    entry = make_video_entry("abc123", published="2026-01-01T00:00:00+00:00")
 
     # Act
     store.enqueue(entry, now=100.0)
@@ -154,7 +139,7 @@ def test_enqueue_with_default_now_uses_time_module(
     store = open_store(tmp_path / "queue.sqlite3")
 
     # Act
-    store.enqueue(_entry())
+    store.enqueue(make_video_entry())
     record = store.next_due()
 
     # Assert
@@ -169,7 +154,7 @@ def test_next_due_returns_oldest_first(tmp_path: Path) -> None:
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
     for index, video_id in enumerate(["oldest", "middle", "newest"]):
-        store.enqueue(_entry(video_id), now=100.0 + index)
+        store.enqueue(make_video_entry(video_id), now=100.0 + index)
 
     # Act
     record = store.next_due(now=1e12)
@@ -185,7 +170,7 @@ def test_next_due_skips_future_records(tmp_path: Path) -> None:
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
     now = time.time()
-    store.enqueue(_entry(), now=now + 999)
+    store.enqueue(make_video_entry(), now=now + 999)
 
     # Act
     record = store.next_due(now=now)
@@ -199,8 +184,8 @@ def test_next_due_skips_terminal_records(tmp_path: Path) -> None:
     """A record with a terminal state is never returned by next_due."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry("done"), now=100.0)
-    store.enqueue(_entry("pending"), now=101.0)
+    store.enqueue(make_video_entry("done"), now=100.0)
+    store.enqueue(make_video_entry("pending"), now=101.0)
     store.mark_terminal("done", TerminalState.DONE)
 
     # Act
@@ -229,7 +214,7 @@ def test_mark_attempt_bumps_attempts_and_sets_last_attempt_at(tmp_path: Path) ->
     """One mark_attempt increments the count and records the attempt time."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
 
     # Act
     store.mark_attempt("dQw4w9WgXcQ", now=42.0)
@@ -249,7 +234,7 @@ def test_mark_attempt_with_default_now_uses_time_module(
     # Arrange
     fixed = 777.0
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     monkeypatch.setattr(time, "time", lambda: fixed)
 
     # Act
@@ -266,7 +251,7 @@ def test_mark_attempt_updates_next_attempt_at_when_provided(tmp_path: Path) -> N
     """A provided next_attempt_at replaces the stored schedule."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
 
     # Act
     store.mark_attempt("dQw4w9WgXcQ", now=120.0, next_attempt_at=500.0)
@@ -284,7 +269,7 @@ def test_mark_attempt_preserves_existing_next_attempt_at_when_not_provided(
     """Omitting next_attempt_at leaves the existing schedule in place."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
 
     # Act
     store.mark_attempt("dQw4w9WgXcQ", now=120.0, next_attempt_at=None)
@@ -300,7 +285,7 @@ def test_mark_attempt_sets_transcript_path_when_provided(tmp_path: Path) -> None
     """A provided transcript_path is stored on the record."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
 
     # Act
     store.mark_attempt(
@@ -320,7 +305,7 @@ def test_mark_attempt_preserves_transcript_path_when_not_provided(
     """Omitting transcript_path leaves an existing path in place."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.mark_attempt("dQw4w9WgXcQ", now=110.0, transcript_path="/tmp/abc123.vtt")
 
     # Act
@@ -339,7 +324,7 @@ def test_reschedule_updates_next_attempt_at_without_incrementing_attempts(
     """reschedule changes the schedule but leaves attempts alone."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.mark_attempt("dQw4w9WgXcQ", now=110.0)
     store.mark_attempt("dQw4w9WgXcQ", now=120.0)
 
@@ -360,7 +345,7 @@ def test_reschedule_updates_transcript_path_without_incrementing_attempts(
     """reschedule stores a transcript path without touching attempts."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.mark_attempt("dQw4w9WgXcQ", now=110.0)
 
     # Act
@@ -378,7 +363,7 @@ def test_reschedule_updates_rate_limit_streak(tmp_path: Path) -> None:
     """reschedule bumps the streak without touching attempts."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.reschedule("dQw4w9WgXcQ", rate_limit_streak=3)
 
     # Act
@@ -398,7 +383,7 @@ def test_reschedule_partial_update_leaves_other_fields_unchanged(
     """A reschedule that names one column leaves the others as they were."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.reschedule(
         "dQw4w9WgXcQ",
         next_attempt_at=200.0,
@@ -422,7 +407,7 @@ def test_reschedule_with_no_args_is_a_noop(tmp_path: Path) -> None:
     """A reschedule with no arguments changes nothing at all."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.reschedule(
         "dQw4w9WgXcQ",
         next_attempt_at=200.0,
@@ -448,7 +433,7 @@ def test_mark_terminal_excludes_from_next_due(tmp_path: Path) -> None:
     """A terminal record is skipped by next_due."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry("gone"), now=100.0)
+    store.enqueue(make_video_entry("gone"), now=100.0)
 
     # Act
     store.mark_terminal("gone", TerminalState.GIVE_UP_UNAVAILABLE)
@@ -464,7 +449,7 @@ def test_mark_terminal_stores_detail(tmp_path: Path) -> None:
     # Arrange
     path = tmp_path / "queue.sqlite3"
     store = open_store(path)
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
 
     # Act
     store.mark_terminal("dQw4w9WgXcQ", TerminalState.DONE, detail="posted to discord")
@@ -483,7 +468,7 @@ def test_counts_groups_by_state(tmp_path: Path) -> None:
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
     for index in range(5):
-        store.enqueue(_entry(f"vid{index}"), now=100.0 + index)
+        store.enqueue(make_video_entry(f"vid{index}"), now=100.0 + index)
     store.mark_terminal("vid0", TerminalState.DONE)
     store.mark_terminal("vid1", TerminalState.DONE)
     store.mark_terminal("vid2", TerminalState.GIVE_UP_NEVER)
@@ -539,8 +524,8 @@ def test_store_survives_reopen(tmp_path: Path) -> None:
     # Arrange
     path = tmp_path / "queue.sqlite3"
     store = open_store(path)
-    store.enqueue(_entry("kept"), now=100.0)
-    store.enqueue(_entry("done"), now=101.0)
+    store.enqueue(make_video_entry("kept"), now=100.0)
+    store.enqueue(make_video_entry("done"), now=101.0)
 
     # Act
     store.mark_terminal("done", TerminalState.DONE, detail="finished")
@@ -569,12 +554,12 @@ def test_operations_after_close_raise_runtime_error(tmp_path: Path) -> None:
     """Every public operation rejects use after close."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.close()
 
     # Act / Assert
     with pytest.raises(RuntimeError):
-        store.enqueue(_entry("other"))
+        store.enqueue(make_video_entry("other"))
     with pytest.raises(RuntimeError):
         store.next_due()
     with pytest.raises(RuntimeError):
@@ -605,7 +590,7 @@ def test_enqueue_with_delay_pushes_next_attempt_at(tmp_path: Path) -> None:
     store = open_store(path)
 
     # Act
-    store.enqueue(_entry(), now=100.0, delay_seconds=300.0)
+    store.enqueue(make_video_entry(), now=100.0, delay_seconds=300.0)
     before = store.next_due(now=399.0)
     due = store.next_due(now=400.0)
     row = _read_row(path, "dQw4w9WgXcQ")
@@ -625,7 +610,7 @@ def test_enqueue_with_default_delay_is_immediate(tmp_path: Path) -> None:
     store = open_store(path)
 
     # Act
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     due = store.next_due(now=100.0)
     row = _read_row(path, "dQw4w9WgXcQ")
 
@@ -643,10 +628,10 @@ def test_enqueue_duplicate_with_delay_preserves_original_schedule(
     # Arrange
     path = tmp_path / "queue.sqlite3"
     store = open_store(path)
-    store.enqueue(_entry(), now=100.0, delay_seconds=300.0)
+    store.enqueue(make_video_entry(), now=100.0, delay_seconds=300.0)
 
     # Act
-    second = store.enqueue(_entry(), now=200.0, delay_seconds=600.0)
+    second = store.enqueue(make_video_entry(), now=200.0, delay_seconds=600.0)
     row = _read_row(path, "dQw4w9WgXcQ")
 
     # Assert
@@ -663,8 +648,8 @@ def test_enqueue_with_zero_delay_equivalent_to_default(tmp_path: Path) -> None:
     default_store = open_store(tmp_path / "default.sqlite3")
 
     # Act
-    explicit_store.enqueue(_entry(), now=100.0, delay_seconds=0.0)
-    default_store.enqueue(_entry(), now=200.0)
+    explicit_store.enqueue(make_video_entry(), now=100.0, delay_seconds=0.0)
+    default_store.enqueue(make_video_entry(), now=200.0)
     explicit_due = explicit_store.next_due(now=100.0)
     default_due = default_store.next_due(now=200.0)
     explicit_row = _read_row(tmp_path / "explicit.sqlite3", "dQw4w9WgXcQ")
@@ -687,7 +672,7 @@ def test_audio_path_defaults_to_none_on_new_record(tmp_path: Path) -> None:
     store = open_store(tmp_path / "queue.sqlite3")
 
     # Act
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     record = store.next_due(now=1e12)
 
     # Assert
@@ -700,7 +685,7 @@ def test_mark_attempt_sets_audio_path_when_provided(tmp_path: Path) -> None:
     """A provided audio_path is stored and the attempt still counts."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
 
     # Act
     store.mark_attempt(
@@ -721,7 +706,7 @@ def test_mark_attempt_preserves_audio_path_when_not_provided(
     """Omitting audio_path leaves an existing path in place."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.mark_attempt("dQw4w9WgXcQ", now=110.0, audio_path="/data/audio/abc.webm")
 
     # Act
@@ -740,7 +725,7 @@ def test_mark_attempt_bumps_attempts_when_setting_audio_path(
     """Setting audio_path through mark_attempt still counts one attempt."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
 
     # Act
     store.mark_attempt("dQw4w9WgXcQ", now=130.0, audio_path="/path")
@@ -759,7 +744,7 @@ def test_reschedule_updates_audio_path_without_incrementing_attempts(
     """reschedule stores an audio path without touching attempts or time."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.mark_attempt("dQw4w9WgXcQ", now=110.0)
 
     # Act
@@ -780,7 +765,7 @@ def test_reschedule_preserves_audio_path_when_not_provided(
     """A reschedule without audio_path leaves the existing path alone."""
     # Arrange
     store = open_store(tmp_path / "queue.sqlite3")
-    store.enqueue(_entry(), now=100.0)
+    store.enqueue(make_video_entry(), now=100.0)
     store.reschedule("dQw4w9WgXcQ", audio_path="/x.webm")
 
     # Act

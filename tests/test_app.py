@@ -26,6 +26,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from helpers import make_video_entry
 from tldw import _version
 from tldw.app import _renewal_loop, create_app, renewal_delay
 from tldw.config import Settings
@@ -51,19 +52,6 @@ def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
     }
     defaults.update(overrides)
     return Settings(**defaults)
-
-
-def _video_entry(video_id: str = "v_TestAAAAAAAAAAAAA") -> VideoEntry:
-    """Build a VideoEntry for direct queue manipulation in tests."""
-    return VideoEntry(
-        video_id=video_id,
-        channel_id="UC_x5XG1OV2P6uZZ5FSM9Ttw",
-        title=f"Test {video_id}",
-        url=f"https://www.youtube.com/watch?v={video_id}",
-        channel_name="Test Channel",
-        published=None,
-        updated=None,
-    )
 
 
 def _read_titles(queue_file: Path) -> set[str]:
@@ -969,7 +957,7 @@ def test_lifespan_closes_queue_on_shutdown(tmp_path: Path) -> None:
     # Assert
     assert app.state.queue is not None
     with pytest.raises(RuntimeError):
-        app.state.queue.enqueue(_video_entry())
+        app.state.queue.enqueue(make_video_entry())
 
 
 def test_lifespan_survives_queue_store_open_failure(
@@ -1261,8 +1249,8 @@ def test_queue_endpoint_returns_counts_json(tmp_path: Path) -> None:
 
     # Act
     with TestClient(app) as client:
-        app.state.queue.enqueue(_video_entry("v_a"))
-        app.state.queue.enqueue(_video_entry("v_b"))
+        app.state.queue.enqueue(make_video_entry("v_a"))
+        app.state.queue.enqueue(make_video_entry("v_b"))
         app.state.queue.mark_terminal("v_a", TerminalState.DONE)
         response = client.get("/queue")
 

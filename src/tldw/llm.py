@@ -1,11 +1,11 @@
 """LLM-backed video takeaways for tldw.
 
 This module owns the LLM seam. ``TakeawayAnalyzer`` is the Protocol the worker
-depends on, and ``OpencodeGoAnalyzer`` is the production implementation that
-talks to the OpenCode Go gateway through the Anthropic-compatible SDK that
-pydantic-ai wraps. Keeping the seam behind a Protocol lets the worker inject a
-fake in tests, and lets pydantic-ai's ``FunctionModel`` exercise the real Agent,
-schema validation, and retry loop fully offline.
+depends on, and ``OpenAIAnalyzer`` is the production implementation that
+talks to the OpenAI chat completions API through pydantic-ai's
+``OpenAIModel``. Keeping the seam behind a Protocol lets the worker inject a
+fake in tests, and lets pydantic-ai's ``FunctionModel`` exercise the real
+Agent, schema validation, and retry loop fully offline.
 
 The worker renders a transcript (see ``render_transcript_for_llm``) and passes
 the resulting string here. This module never reads subtitles and never touches
@@ -16,16 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import bisect
-import hashlib
 import logging
 from typing import TYPE_CHECKING, Any, Protocol
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
-from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
-from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from tldw.config import Settings
 
@@ -39,8 +38,7 @@ __all__ = [
     "Takeaway",
     "Takeaways",
     "TakeawayAnalyzer",
-    "OpencodeGoAnalyzer",
-    "session_id_for",
+    "OpenAIAnalyzer",
     "snap_timestamps",
     "SYSTEM_PROMPT",
 ]
@@ -92,15 +90,6 @@ class Takeaways(BaseModel):
     items: list[Takeaway] = Field(min_length=3, max_length=3)
 
 
-def session_id_for(video_id: str) -> str:
-    """Return a stable per-video session id for the x-opencode-session header.
-
-    The format is ``ses_`` plus 32 hex characters, derived deterministically
-    from ``video_id`` so a retry of the same video reuses the same id.
-    """
-    return "ses_" + hashlib.sha256(video_id.encode("utf-8")).hexdigest()[:32]
-
-
 class TakeawayAnalyzer(Protocol):
     """Seam for turning a rendered transcript into structured takeaways."""
 
@@ -109,8 +98,8 @@ class TakeawayAnalyzer(Protocol):
     ) -> Takeaways: ...
 
 
-class OpencodeGoAnalyzer:
-    """Production analyzer backed by the OpenCode Go gateway via pydantic-ai."""
+class OpenAIAnalyzer:
+    """Production analyzer backed by OpenAI through pydantic-ai."""
 
     def __init__(
         self,
@@ -122,27 +111,19 @@ class OpencodeGoAnalyzer:
         self._settings = settings
         self._model_override = model
 
-    def _build_client(self, session_id: str | None = None) -> AsyncAnthropic:
-        """Build an AsyncAnthropic client with the headers the gateway requires.
+    def _build_client(self) -> AsyncOpenAI:
+        """Build an ``AsyncOpenAI`` client from the configured credentials.
 
-        Three headers matter: ``x-api-key`` (the Anthropic SDK's own convention),
-        ``Authorization: Bearer`` (some gateways check this instead), and
-        ``x-opencode-session`` (required by OpenCode Go). The session header is
-        per-video, so it is passed in at construction: ``default_headers``
-        returns a fresh merged dict on each access, which means mutating it after
-        the client exists does not stick. When ``session_id`` is omitted a
-        deterministic placeholder is used, which is enough for structural checks.
+        OpenAI's API only needs the bearer token, so there are no extra
+        session or version headers to thread through. The base URL is
+        configurable so the same analyzer can target OpenAI-compatible
+        gateways when needed.
         """
-        if not self._settings.opencode_api_key:
-            raise ValueError("opencode_api_key is required")
-        key = self._settings.opencode_api_key
-        return AsyncAnthropic(
-            api_key=key,
-            base_url=self._settings.opencode_base_url,
-            default_headers={
-                "Authorization": f"Bearer {key}",
-                "x-opencode-session": session_id or session_id_for(""),
-            },
+        if not self._settings.openai_api_key:
+            raise ValueError("openai_api_key is required")
+        return AsyncOpenAI(
+            api_key=self._settings.openai_api_key,
+            base_url=self._settings.openai_base_url,
         )
 
     async def analyze(
@@ -152,7 +133,7 @@ class OpencodeGoAnalyzer:
 
         Oversized input is truncated with a warning rather than rejected. A
         fresh client is built per call: the worker is serial, so connection
-        reuse is not worth leaking one video's session header into another. The
+        reuse is not worth leaking one video's session into another. The
         per-takeaway bullet cap is applied after validation.
         """
         if len(transcript) > self._settings.llm_max_input_chars:
@@ -164,10 +145,10 @@ class OpencodeGoAnalyzer:
             )
             transcript = transcript[: self._settings.llm_max_input_chars]
 
-        async with self._build_client(session_id_for(video_id)) as client:
-            model = self._model_override or AnthropicModel(
-                self._settings.opencode_model,
-                provider=AnthropicProvider(anthropic_client=client),
+        async with self._build_client() as client:
+            model = self._model_override or OpenAIChatModel(
+                self._settings.openai_model,
+                provider=OpenAIProvider(openai_client=client),
             )
             agent = Agent(
                 model,
@@ -176,7 +157,7 @@ class OpencodeGoAnalyzer:
                 # 2.54 spells this ``retries``; it controls output validation
                 # retries (there is no ``output_retries`` kwarg in this version).
                 retries=DEFAULT_OUTPUT_RETRIES,
-                model_settings=AnthropicModelSettings(
+                model_settings=OpenAIChatModelSettings(
                     max_tokens=self._settings.llm_max_output_tokens
                 ),
             )

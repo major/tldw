@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-import anthropic
+import openai
 import httpx2
 import pydantic_ai.exceptions
 import pytest
@@ -23,7 +23,7 @@ from pydantic import ValidationError
 
 from tldw.config import Settings
 from tldw.feed import VideoEntry
-from tldw.llm import OpencodeGoAnalyzer, Takeaways
+from tldw.llm import OpenAIAnalyzer, Takeaways
 from tldw.queue import QueueRecord, QueueStore, TerminalState, open_store
 from tldw.transcript import ProbeResult, ProbeState
 from tldw.worker import _process_record
@@ -54,7 +54,7 @@ def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "discord_webhook_url": "https://discord.com/api/webhooks/x/y",
         "transcript_dir": tmp_path / "transcripts",
         "queue_file": tmp_path / "queue.sqlite3",
-        "opencode_api_key": "test-key",
+        "openai_api_key": "test-key",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -271,7 +271,7 @@ async def test_no_api_key_skips_analysis_and_sends_plain(
 ) -> None:
     """Without an API key the analyzer never runs and the plain digest is sent."""
     # Arrange
-    settings = _make_settings(tmp_path, opencode_api_key=None)
+    settings = _make_settings(tmp_path, openai_api_key=None)
     now = 1000.0
     _enqueue_with_path(store, _write_vtt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
@@ -345,10 +345,10 @@ def _validation_error() -> ValidationError:
     raise AssertionError("expected Takeaways validation to fail")
 
 
-def _api_error() -> anthropic.APIError:
-    """Build a real anthropic APIError without touching the network."""
-    request = httpx2.Request("POST", "https://opencode.ai/zen/go")
-    return anthropic.APIError("boom", request=request, body=None)
+def _api_error() -> openai.APIError:
+    """Build a real openai APIError without touching the network."""
+    request = httpx2.Request("POST", "https://api.openai.com/v1")
+    return openai.APIError("boom", request=request, body=None)
 
 
 def _unexpected_model_behavior() -> pydantic_ai.exceptions.UnexpectedModelBehavior:
@@ -409,13 +409,13 @@ async def test_llm_failure_falls_back_to_plain_digest(
 
 @pytest.mark.live
 @pytest.mark.skipif(
-    not os.environ.get("TLDW_OPENCODE_API_KEY"),
-    reason="TLDW_OPENCODE_API_KEY not set",
+    not os.environ.get("TLDW_OPENAI_API_KEY"),
+    reason="TLDW_OPENAI_API_KEY not set",
 )
-async def test_live_opencode_analyzer_returns_takeaways() -> None:
-    """One real gateway request returns three validated takeaways."""
-    settings = Settings(opencode_api_key=os.environ["TLDW_OPENCODE_API_KEY"])
-    analyzer = OpencodeGoAnalyzer(settings)
+async def test_live_openai_analyzer_returns_takeaways() -> None:
+    """One real OpenAI request returns three validated takeaways."""
+    settings = Settings(openai_api_key=os.environ["TLDW_OPENAI_API_KEY"])
+    analyzer = OpenAIAnalyzer(settings)
     transcript = (
         "[0:00] Welcome to the show.\n"
         "[0:10] Today we talk about testing.\n"

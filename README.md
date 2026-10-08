@@ -53,9 +53,9 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_GIVEUP_SECONDS` | No | `172800` | Stop retrying a video after this many seconds |
 | `TLDW_YTDLP_COOKIES_FILE` | No | unset | Optional path to a Netscape-format cookies file. Improves reliability when YouTube applies bot checks |
 | `TLDW_TRANSCRIPT_LANGS` | No | `["en", "en-orig"]` | Language codes to request from yt-dlp. Use exact codes only; a regex like `en.*` triggers 429s |
-| `TLDW_OPENCODE_API_KEY` | No | unset | API key for the OpenCode Go gateway. When unset, the LLM takeaway step is skipped and the plain digest is sent |
-| `TLDW_OPENCODE_BASE_URL` | No | `https://opencode.ai/zen/go` | Base URL for the OpenCode Go gateway |
-| `TLDW_OPENCODE_MODEL` | No | `qwen3.8-max` | Model name to request from the gateway |
+| `TLDW_OPENAI_API_KEY` | No | unset | API key for the OpenAI API. When unset, the LLM takeaway step is skipped and the plain digest is sent |
+| `TLDW_OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible endpoint |
+| `TLDW_OPENAI_MODEL` | No | `gpt-6.1-sol` | Model name to request from the endpoint |
 | `TLDW_LLM_TIMEOUT_SECONDS` | No | `180.0` | Per-call timeout for a takeaway request |
 | `TLDW_LLM_MAX_OUTPUT_TOKENS` | No | `2048` | Maximum tokens the takeaway model may generate |
 | `TLDW_LLM_MAX_INPUT_CHARS` | No | `300000` | Hard cap on transcript characters sent to the model. Longer transcripts are truncated with a warning |
@@ -101,7 +101,7 @@ YouTube session cookies expire, typically after a few weeks of inactivity. When 
 
 ### LLM video takeaways
 
-When `TLDW_OPENCODE_API_KEY` is set, the worker sends the transcript through the OpenCode Go gateway and posts three Discord embeds instead of the plain digest. Each embed has a short title, a summary, and bullet points that link back to the exact moment in the video. The timestamps come from the `[m:ss]` anchors the worker adds to the rendered transcript. Unset the API key to disable takeaways and go back to the plain text digest.
+When `TLDW_OPENAI_API_KEY` is set, the worker sends the transcript through the OpenAI API and posts three Discord embeds instead of the plain digest. Each embed has a short title, a summary, and bullet points that link back to the exact moment in the video. The timestamps come from the `[m:ss]` anchors the worker adds to the rendered transcript. Unset the API key to disable takeaways and go back to the plain text digest.
 
 If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a probe, so it does not consume the request budget. :robot:
 

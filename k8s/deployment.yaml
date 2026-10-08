@@ -61,6 +61,16 @@ spec:
             # notifications are still enqueued for a later restart.
             - name: TLDW_DISCORD_WEBHOOK_URL
               value: ""
+            # LLM takeaway settings. The API key must come from a Secret in
+            # production so it is not exposed in the pod spec. The base URL
+            # and model default to public OpenAI when unset, so they are
+            # hard-coded here for visibility.
+            - name: TLDW_OPENAI_API_KEY
+              value: ""
+            - name: TLDW_OPENAI_BASE_URL
+              value: "https://api.openai.com/v1"
+            - name: TLDW_OPENAI_MODEL
+              value: "gpt-6.1-sol"
             - name: TLDW_POLL_BASE_SECONDS
               value: "600"
             - name: TLDW_POLL_CAP_SECONDS

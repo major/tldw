@@ -12,7 +12,7 @@ dependencies = [
     "fastapi>=0.110,<1",
     "httpx2>=2.13.1,<3",
     "pydantic-ai>=2.54",
-    "anthropic>=1.12,<2",
+    "openai>=3.19,<4",
     "pydantic-settings>=2.5,<3",
     "uvicorn>=0.30,<1",
     "yt-dlp[default]>=2026.8.19,<2027",
@@ -49,7 +49,7 @@ addopts = [
 ]
 asyncio_mode = "auto"
 markers = [
-    "live: marks tests as hitting the real opencode go gateway (run with: uv run pytest -m live --force-enable-socket)",
+    "live: marks tests as hitting the real OpenAI API (run with: uv run pytest -m live --force-enable-socket)",
 ]
 
 [tool.coverage.run]

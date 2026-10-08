@@ -25,7 +25,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from helpers import make_settings, make_video_entry
+from helpers import make_capturing_transport, make_settings, make_video_entry
 from tldw import _version
 from tldw.app import _renewal_loop, create_app, renewal_delay
 from tldw.config import Settings
@@ -490,23 +490,6 @@ def captured_hub_requests() -> list[httpx2.Request]:
     return []
 
 
-def _make_capturing_transport(
-    captured: list[httpx2.Request], responses: list[httpx2.Response] | None = None
-) -> httpx2.MockTransport:
-    """Build a MockTransport. ``responses[0]`` is returned for the first request, then 202s."""
-    index = {"i": 0}
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured.append(request)
-        if responses is not None and index["i"] < len(responses):
-            resp = responses[index["i"]]
-            index["i"] += 1
-            return resp
-        return httpx2.Response(202)
-
-    return httpx2.MockTransport(handler)
-
-
 async def _never_sleep(_: float) -> None:
     """Sleep stub that raises if invoked; tests expect the loop to skip the sleep entirely."""
     raise AssertionError("renewal loop should have skipped sleeping")
@@ -521,7 +504,9 @@ async def _drive_renewal_loop(
 ) -> None:
     """Build an app + MockTransport client, run the renewal loop, close the client."""
     app = create_app(settings)
-    transport = _make_capturing_transport(captured, responses=responses)
+    transport = make_capturing_transport(
+        captured, responses=responses, default_status=202
+    )
     async with httpx2.AsyncClient(transport=transport) as client:
         await _renewal_loop(app, client, sleep=sleep)
 
@@ -547,7 +532,9 @@ def test_lifespan_subscribes_to_every_resolved_channel(
 ) -> None:
     """Startup POSTs one subscribe per resolved channel with the right topic."""
     # Arrange
-    transport = _make_capturing_transport(captured_hub_requests)
+    transport = make_capturing_transport(
+        captured_hub_requests, default_status=202
+    )
     app = create_app(settings_with_channels, transport=transport)
 
     # Act
@@ -572,7 +559,9 @@ def test_lifespan_includes_hub_secret_in_body_when_configured(
 ) -> None:
     """A configured hub secret is sent as hub.secret in every subscribe body."""
     # Arrange
-    transport = _make_capturing_transport(captured_hub_requests)
+    transport = make_capturing_transport(
+        captured_hub_requests, default_status=202
+    )
     app = create_app(settings_with_channels, transport=transport)
 
     # Act
@@ -593,7 +582,9 @@ def test_lifespan_skips_subscribe_when_callback_url_is_missing(
 ) -> None:
     """Without a callback URL no subscribe is sent and the reason is logged."""
     # Arrange
-    transport = _make_capturing_transport(captured_hub_requests)
+    transport = make_capturing_transport(
+        captured_hub_requests, default_status=202
+    )
     app = create_app(settings_without_callback, transport=transport)
 
     # Act
@@ -616,7 +607,9 @@ def test_lifespan_skips_subscribe_when_no_channels_resolve(
 ) -> None:
     """An empty channel list sends no subscribe and logs that none resolved."""
     # Arrange
-    transport = _make_capturing_transport(captured_hub_requests)
+    transport = make_capturing_transport(
+        captured_hub_requests, default_status=202
+    )
     app = create_app(settings_empty_channels, transport=transport)
 
     # Act
@@ -638,7 +631,9 @@ def test_lifespan_closes_http_client_on_shutdown(
 ) -> None:
     """The lifespan closes the shared HTTP client when the app shuts down."""
     # Arrange
-    transport = _make_capturing_transport(captured_hub_requests)
+    transport = make_capturing_transport(
+        captured_hub_requests, default_status=202
+    )
     app = create_app(settings_with_channels, transport=transport)
 
     # Act
@@ -656,7 +651,9 @@ def test_lifespan_passes_default_hub_url(
 ) -> None:
     """The default hub URL points at the public hub, not a local mock."""
     # Arrange
-    transport = _make_capturing_transport(captured_hub_requests)
+    transport = make_capturing_transport(
+        captured_hub_requests, default_status=202
+    )
     app = create_app(settings_with_channels, transport=transport)
 
     # Act
@@ -678,7 +675,9 @@ def test_lifespan_continues_when_hub_returns_non_2xx(
     """A non-2xx subscribe logs a warning for that channel and the loop continues."""
     # Arrange
     responses = [httpx2.Response(202), httpx2.Response(400, text="bad topic")]
-    transport = _make_capturing_transport(captured_hub_requests, responses)
+    transport = make_capturing_transport(
+        captured_hub_requests, responses, default_status=202
+    )
     app = create_app(settings_with_channels, transport=transport)
 
     # Act
@@ -826,7 +825,9 @@ def test_lifespan_cancels_renewal_task_on_shutdown(
 ) -> None:
     """The lifespan starts a renewal task and cancels it on shutdown."""
     # Arrange
-    transport = _make_capturing_transport(captured_hub_requests)
+    transport = make_capturing_transport(
+        captured_hub_requests, default_status=202
+    )
     app = create_app(settings_with_channels, transport=transport)
 
     # Act

@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import httpx2
+
 from tldw.config import Settings
 from tldw.feed import VideoEntry
 
@@ -53,3 +55,41 @@ def make_settings(tmp_path: Path | None = None, **overrides: Any) -> Settings:
         defaults["queue_file"] = tmp_path / "queue.sqlite3"
     defaults.update(overrides)
     return Settings(**defaults)
+
+
+def make_capturing_transport(
+    captured: list[httpx2.Request],
+    responses: list[httpx2.Response] | None = None,
+    *,
+    default_status: int = 200,
+    default_json: dict[str, object] | None = None,
+    default_text: str | None = None,
+) -> httpx2.MockTransport:
+    """Build an ``httpx2.MockTransport`` that records each request.
+
+    ``responses`` is replayed in order. When the list is exhausted, every
+    additional request receives a default response of ``default_status`` with
+    ``default_json`` as the JSON body or ``default_text`` as the text body
+    (both ``None`` produces a bare status response with no body).
+
+    This consolidates three near-identical helpers that previously lived in
+    ``test_app.py``, ``test_discord.py``, and ``test_send_embeds.py`` (which
+    defaulted to 202, 200, and 204 respectively) and the inline transport
+    handlers in ``test_hub.py``.
+    """
+    queue = list(responses or [])
+    index = {"i": 0}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured.append(request)
+        if index["i"] < len(queue):
+            response = queue[index["i"]]
+            index["i"] += 1
+            return response
+        if default_json is not None:
+            return httpx2.Response(default_status, json=default_json)
+        if default_text is not None:
+            return httpx2.Response(default_status, text=default_text)
+        return httpx2.Response(default_status)
+
+    return httpx2.MockTransport(handler)

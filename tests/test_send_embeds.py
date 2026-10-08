@@ -14,27 +14,10 @@ from collections.abc import Awaitable, Callable
 import httpx2
 import pytest
 
+from helpers import make_capturing_transport
 from tldw.discord import send, send_embeds
 
 _WEBHOOK = "https://discord.example/api/webhooks/123/abc"
-
-
-def _make_capturing_transport(
-    captured: list[httpx2.Request],
-    responses: list[httpx2.Response],
-) -> httpx2.MockTransport:
-    """Record each request and replay ``responses`` in order, then 204s."""
-    index = {"i": 0}
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured.append(request)
-        if index["i"] < len(responses):
-            resp = responses[index["i"]]
-            index["i"] += 1
-            return resp
-        return httpx2.Response(204)
-
-    return httpx2.MockTransport(handler)
 
 
 def _recording_sleep() -> tuple[list[float], Callable[[float], Awaitable[None]]]:
@@ -69,7 +52,7 @@ async def _send_embeds_once(
     sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> None:
     """Run one send_embeds against a recording MockTransport."""
-    transport = _make_capturing_transport(captured, responses)
+    transport = make_capturing_transport(captured, responses, default_status=204)
     async with httpx2.AsyncClient(transport=transport) as client:
         if sleep is None:
             await send_embeds(client, _WEBHOOK, embeds)
@@ -135,7 +118,7 @@ async def test_send_embeds_raises_after_second_429() -> None:
 async def test_send_embeds_raises_on_empty_embeds() -> None:
     """An empty embed list is a caller bug, not a no-op."""
     captured: list[httpx2.Request] = []
-    transport = _make_capturing_transport(captured, [])
+    transport = make_capturing_transport(captured, [], default_status=204)
     async with httpx2.AsyncClient(transport=transport) as client:
         with pytest.raises(ValueError):
             await send_embeds(client, _WEBHOOK, [])
@@ -151,7 +134,7 @@ async def test_send_embeds_raises_on_empty_embeds() -> None:
 async def test_send_still_posts_content_body() -> None:
     """The refactored send() still posts a {"content": ...} body."""
     captured: list[httpx2.Request] = []
-    transport = _make_capturing_transport(captured, [])
+    transport = make_capturing_transport(captured, [], default_status=204)
 
     async with httpx2.AsyncClient(transport=transport) as client:
         await send(client, _WEBHOOK, "hello")

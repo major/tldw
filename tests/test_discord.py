@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 import httpx2
 import pytest
 
+from helpers import make_capturing_transport
 from tldw.discord import (
     DEFAULT_MAX_CHARS,
     DEFAULT_RETRY_AFTER_SECONDS,
@@ -26,25 +27,6 @@ from tldw.discord import (
 _WEBHOOK = "https://discord.example/api/webhooks/123/abc"
 
 
-def _make_capturing_transport(
-    captured: list[httpx2.Request],
-    responses: list[httpx2.Response],
-) -> httpx2.MockTransport:
-    """Record each request and replay ``responses`` in order, then 200s."""
-    index = {"i": 0}
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured.append(request)
-        if index["i"] < len(responses):
-            resp = responses[index["i"]]
-            index["i"] += 1
-            return resp
-        # Default to 200 if we run out of pre-configured responses.
-        return httpx2.Response(200, json={"id": "x"})
-
-    return httpx2.MockTransport(handler)
-
-
 async def _send_once(
     captured: list[httpx2.Request],
     responses: list[httpx2.Response],
@@ -54,7 +36,9 @@ async def _send_once(
     sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> None:
     """Run one send against a recording MockTransport."""
-    transport = _make_capturing_transport(captured, responses)
+    transport = make_capturing_transport(
+        captured, responses, default_status=200, default_json={"id": "x"}
+    )
     async with httpx2.AsyncClient(transport=transport) as client:
         if sleep is None:
             await send(client, _WEBHOOK, content, max_chars=max_chars)

@@ -282,6 +282,22 @@ async def _process_record(
                 rate_limit_streak=0,
             )
             record_path = result.transcript_path
+            if record_path is not None:
+                try:
+                    _size = Path(record_path).stat().st_size
+                except OSError:
+                    _size = -1
+                logger.info(
+                    "transcript ready: video=%s path=%s size_bytes=%d",
+                    record.video_id,
+                    record_path,
+                    _size,
+                )
+            else:
+                logger.info(
+                    "transcript ready: video=%s path=None",
+                    record.video_id,
+                )
         elif result.state is ProbeState.RATE_LIMITED:
             # Count consecutive 429s on the row. Any other outcome below resets
             # this to 0, so the give-up budget only trips on a real streak.
@@ -328,6 +344,16 @@ async def _process_record(
     else:
         # The subtitle file is already cached, so skip the probe entirely.
         record_path = record.transcript_path
+        try:
+            _size = Path(record_path).stat().st_size
+        except OSError:
+            _size = -1
+        logger.info(
+            "using cached transcript: video=%s path=%s size_bytes=%d",
+            record.video_id,
+            record_path,
+            _size,
+        )
 
     if record_path is None:
         # A READY probe without a path should not happen; log and leave the
@@ -341,7 +367,18 @@ async def _process_record(
         """Send the plain text digest and mark the record DONE."""
         lines = _digest_lines(path, settings.transcript_lines)
         message = format_message(record.title, record.channel_name, record.url, lines)
+        logger.info(
+            "calling discord: video=%s kind=plain digest_lines=%d",
+            record.video_id,
+            len(lines),
+        )
+        _t0 = time.monotonic()
         await send(client, settings.discord_webhook_url, message)
+        logger.info(
+            "called discord: video=%s kind=plain duration_s=%.2f",
+            record.video_id,
+            time.monotonic() - _t0,
+        )
         store.mark_terminal(record.video_id, TerminalState.DONE, detail=detail)
 
     # Try the LLM takeaway path when configured, then fall back to the plain
@@ -360,6 +397,15 @@ async def _process_record(
                 await _send_plain(detail=None)
                 return
             resolved_analyze = analyze or _default_analyze_factory(settings)
+            logger.info(
+                "handing off to LLM: video=%s model=%s max_output_tokens=%d "
+                "transcript_chars=%d",
+                record.video_id,
+                settings.openai_model,
+                settings.llm_max_output_tokens,
+                len(rendered),
+            )
+            _llm_t0 = time.monotonic()
             try:
                 takeaways = await resolved_analyze(
                     rendered, record.video_id, record.title
@@ -380,6 +426,14 @@ async def _process_record(
                 )
                 await _send_plain(detail="llm_fallback")
                 return
+            _bullets = sum(len(t.bullets) for t in takeaways.items)
+            logger.info(
+                "LLM returned: video=%s takeaways=%d bullets=%d duration_s=%.2f",
+                record.video_id,
+                len(takeaways.items),
+                _bullets,
+                time.monotonic() - _llm_t0,
+            )
             takeaways = snap_timestamps(takeaways, cues)
             embeds = build_takeaway_embeds(
                 takeaways,
@@ -387,7 +441,18 @@ async def _process_record(
                 video_url=record.url,
                 channel_name=record.channel_name,
             )
+            logger.info(
+                "calling discord: video=%s kind=embeds embed_count=%d",
+                record.video_id,
+                len(embeds),
+            )
+            _discord_t0 = time.monotonic()
             await send_embeds(client, settings.discord_webhook_url, embeds)
+            logger.info(
+                "called discord: video=%s kind=embeds duration_s=%.2f",
+                record.video_id,
+                time.monotonic() - _discord_t0,
+            )
             store.mark_terminal(
                 record.video_id,
                 TerminalState.DONE,

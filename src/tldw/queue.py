@@ -90,15 +90,17 @@ class TerminalState(StrEnum):
     """Why a queued video is no longer pending.
 
     DONE means the transcript was fetched and delivered. The GIVE_UP_* values
-    record the three ways the worker stops trying: the 48 hour cutoff with no
-    captions ever seen, a video that is gone or bot-checked, and a 429 budget
-    that has been exhausted.
+    record the four ways the worker stops trying: the 48 hour cutoff with no
+    captions ever seen, a video that is gone or bot-checked, a 429 budget that
+    has been exhausted, and an audio transcription the API rejected with a
+    permanent 4xx error (for example a corrupt upload).
     """
 
     DONE = "DONE"
     GIVE_UP_NEVER = "GIVE_UP_NEVER"
     GIVE_UP_UNAVAILABLE = "GIVE_UP_UNAVAILABLE"
     GIVE_UP_RATE_LIMITED_DEAD = "GIVE_UP_RATE_LIMITED_DEAD"
+    GIVE_UP_AUDIO = "GIVE_UP_AUDIO"
 
 
 @dataclass(frozen=True, slots=True)

@@ -24,7 +24,11 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.models.openai import (
+    OpenAIChatModelSettings,
+    OpenAIResponsesModel,
+    OpenAIResponsesModelSettings,
+)
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from tldw.config import Settings
@@ -151,7 +155,7 @@ class OpenAIAnalyzer:
             transcript = transcript[: self._settings.llm_max_input_chars]
 
         async with self._build_client() as client:
-            model = self._model_override or OpenAIChatModel(
+            model = self._model_override or OpenAIResponsesModel(
                 self._settings.openai_model,
                 provider=OpenAIProvider(openai_client=client),
             )
@@ -162,16 +166,8 @@ class OpenAIAnalyzer:
                 # 2.54 spells this ``retries``; it controls output validation
                 # retries (there is no ``output_retries`` kwarg in this version).
                 retries=DEFAULT_OUTPUT_RETRIES,
-                model_settings=OpenAIChatModelSettings(
+                model_settings=OpenAIResponsesModelSettings(
                     max_tokens=self._settings.llm_max_output_tokens,
-                    # gpt-6.1-sol and similar thinking-model variants default
-                    # to reasoning_effort="medium" on /v1/chat/completions and
-                    # the API rejects function tools when reasoning is active.
-                    # Force it off here so the structured Takeaways parser
-                    # (which is itself a function tool) works. Pydantic-AI
-                    # accepts "none" for OpenAIChatModelSettings.openai_reasoning_effort
-                    # and forwards it to the API.
-                    openai_reasoning_effort="none",
                 ),
             )
             result = await asyncio.wait_for(

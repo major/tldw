@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,14 @@ import httpx2
 import pytest
 from fastapi import FastAPI
 
-from helpers import make_settings, make_video_entry
+from helpers import (
+    counting_sleep,
+    make_settings,
+    make_takeaways,
+    make_video_entry,
+    never_sleep,
+    noop_sleep,
+)
 from tldw import worker
 from tldw.audio import CompressError, DownloadResult, ProbeState
 from tldw.config import Settings
@@ -49,25 +56,6 @@ def _make_app(settings: Settings, queue_store: QueueStore) -> FastAPI:
     app.state.settings = settings
     app.state.queue = queue_store
     return app
-
-
-def _takeaways() -> Takeaways:
-    """Build a valid three-item Takeaways model with no bullet timestamps.
-
-    The audio backend has no cues to snap to, so bullets carry no timestamps.
-    """
-    return Takeaways.model_validate(
-        {
-            "items": [
-                {
-                    "title": f"Takeaway {i}",
-                    "summary": f"Summary {i}",
-                    "bullets": [{"text": f"Bullet {i}"}],
-                }
-                for i in range(3)
-            ]
-        }
-    )
 
 
 def _fetch(queue_store: QueueStore, now: float) -> QueueRecord:
@@ -300,31 +288,6 @@ class CountingSendEmbeds:
 # ---------------------------------------------------------------------------
 
 
-async def _noop_sleep(_delay: float) -> None:
-    """Sleep stub for per-record tests that never need to wait."""
-    return None
-
-
-async def _never_sleep(_delay: float) -> None:
-    """Sleep stub that raises if called; pins a path that must not sleep."""
-    raise AssertionError("loop should have returned before sleeping")
-
-
-def _counting_sleep(
-    delays: list[float], *, cancel_after: int
-) -> Callable[[float], Awaitable[None]]:
-    """Return a sleep stub that records delays and cancels the loop after N calls."""
-    calls = {"count": 0}
-
-    async def sleep(delay: float) -> None:
-        delays.append(delay)
-        calls["count"] += 1
-        if calls["count"] >= cancel_after:
-            raise asyncio.CancelledError
-
-    return sleep
-
-
 async def _run_audio(
     queue_store: QueueStore,
     settings: Settings,
@@ -350,7 +313,7 @@ async def _run_audio(
         analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        sleep=_noop_sleep,
+        sleep=noop_sleep,
         now=now,
     )
 
@@ -387,7 +350,7 @@ async def test_process_record_audio_happy_path_calls_every_stage_in_order(
     )
     compress = FakeCompress(creates=True, order=order)
     transcribe = FakeTranscribe(transcripts=["hello world"], order=order)
-    analyze = FakeAnalyze(result=_takeaways(), order=order)
+    analyze = FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}"), order=order)
     sender = CountingSend(order=order)
     embeds_sender = CountingSendEmbeds(order=order)
 
@@ -447,7 +410,7 @@ async def test_process_record_audio_skips_download_when_audio_path_cached(
         download=download,
         compress=compress,
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -498,7 +461,7 @@ async def test_process_record_audio_re_downloads_when_cached_audio_path_missing(
         download=download,
         compress=compress,
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -535,7 +498,7 @@ async def test_process_record_audio_skips_download_and_compress_when_transcript_
     )
     compress = FakeCompress()
     transcribe = FakeTranscribe()
-    analyze = FakeAnalyze(result=_takeaways())
+    analyze = FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}"))
 
     # Act
     await _run_audio(
@@ -589,7 +552,7 @@ async def test_process_record_audio_classifies_429_as_rate_limited_and_streaks(
         download=download,
         compress=FakeCompress(),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -628,7 +591,7 @@ async def test_process_record_audio_unavailable_marks_give_up(
         download=download,
         compress=FakeCompress(),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -660,7 +623,7 @@ async def test_process_record_audio_not_ready_reschedules_with_poll_backoff(
         download=download,
         compress=FakeCompress(),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -706,7 +669,7 @@ async def test_process_record_audio_compress_error_reschedules_with_300s_backoff
         download=download,
         compress=FakeCompress(raises=CompressError("ffmpeg exploded")),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -744,7 +707,7 @@ async def test_process_record_audio_compress_error_does_not_set_audio_path(
         download=download,
         compress=FakeCompress(raises=CompressError("ffmpeg exploded")),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -784,7 +747,7 @@ async def test_process_record_audio_4xx_api_error_marks_give_up_audio(
         download=download,
         compress=FakeCompress(creates=True),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -820,7 +783,7 @@ async def test_process_record_audio_429_api_error_reschedules_with_audio_path_pr
         download=download,
         compress=FakeCompress(creates=True),
         transcribe=transcribe,
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -909,7 +872,7 @@ async def test_process_record_audio_writes_transcript_txt_and_persists_transcrip
         download=download,
         compress=FakeCompress(creates=True),
         transcribe=FakeTranscribe(transcripts=["hello world"]),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -946,7 +909,7 @@ async def test_process_record_audio_deletes_compressed_audio_after_transcription
         download=download,
         compress=compress,
         transcribe=FakeTranscribe(transcripts=["hello world"]),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -987,7 +950,7 @@ async def test_process_record_audio_48h_give_up_short_circuits_before_download(
         download=download,
         compress=FakeCompress(),
         transcribe=FakeTranscribe(),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -1026,7 +989,7 @@ async def test_process_record_audio_uses_audio_settings_for_dest_dir_and_format(
         download=download,
         compress=compress,
         transcribe=FakeTranscribe(transcripts=["hello world"]),
-        analyze=FakeAnalyze(result=_takeaways()),
+        analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         sender=CountingSend(),
         embeds_sender=CountingSendEmbeds(),
     )
@@ -1061,9 +1024,9 @@ async def test_transcript_loop_requires_openai_api_key(
     monkeypatch.setattr(worker, "_process_record_audio", fake_audio)
 
     # Act
-    # _never_sleep raises if the loop reaches a sleep, so a clean return proves
+    # never_sleep raises if the loop reaches a sleep, so a clean return proves
     # the guard fired before the loop started.
-    await transcript_loop(app, httpx2.AsyncClient(), sleep=_never_sleep)
+    await transcript_loop(app, httpx2.AsyncClient(), sleep=never_sleep)
 
     # Assert
     assert not (tmp_path / "audio").exists()
@@ -1093,11 +1056,11 @@ async def test_transcript_loop_respects_enqueue_delay(
         await transcript_loop(
             app,
             httpx2.AsyncClient(),
-            sleep=_counting_sleep(delays, cancel_after=1),
+            sleep=counting_sleep(delays, cancel_after=1),
             download_audio=download,
             compress_audio=FakeCompress(),
             transcribe=FakeTranscribe(),
-            analyze=FakeAnalyze(result=_takeaways()),
+            analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
         )
 
     # Assert

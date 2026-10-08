@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 import httpx2
 import pytest
 
+from helpers import make_capturing_transport, recording_sleep
 from tldw.discord import (
     DEFAULT_MAX_CHARS,
     DEFAULT_RETRY_AFTER_SECONDS,
@@ -26,25 +27,6 @@ from tldw.discord import (
 _WEBHOOK = "https://discord.example/api/webhooks/123/abc"
 
 
-def _make_capturing_transport(
-    captured: list[httpx2.Request],
-    responses: list[httpx2.Response],
-) -> httpx2.MockTransport:
-    """Record each request and replay ``responses`` in order, then 200s."""
-    index = {"i": 0}
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        captured.append(request)
-        if index["i"] < len(responses):
-            resp = responses[index["i"]]
-            index["i"] += 1
-            return resp
-        # Default to 200 if we run out of pre-configured responses.
-        return httpx2.Response(200, json={"id": "x"})
-
-    return httpx2.MockTransport(handler)
-
-
 async def _send_once(
     captured: list[httpx2.Request],
     responses: list[httpx2.Response],
@@ -54,22 +36,14 @@ async def _send_once(
     sleep: Callable[[float], Awaitable[None]] | None = None,
 ) -> None:
     """Run one send against a recording MockTransport."""
-    transport = _make_capturing_transport(captured, responses)
+    transport = make_capturing_transport(
+        captured, responses, default_status=200, default_json={"id": "x"}
+    )
     async with httpx2.AsyncClient(transport=transport) as client:
         if sleep is None:
             await send(client, _WEBHOOK, content, max_chars=max_chars)
         else:
             await send(client, _WEBHOOK, content, max_chars=max_chars, sleep=sleep)
-
-
-def _recording_sleep() -> tuple[list[float], Callable[[float], Awaitable[None]]]:
-    """Return a delay list and a sleep stub that records instead of waiting."""
-    delays: list[float] = []
-
-    async def sleep(delay: float) -> None:
-        delays.append(delay)
-
-    return delays, sleep
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +261,7 @@ async def test_send_retries_once_on_429_with_retry_after() -> None:
         httpx2.Response(429, headers={"Retry-After": "1.5"}),
         httpx2.Response(200, json={"id": "x"}),
     ]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act
     await _send_once(captured, responses, "hello", sleep=sleep)
@@ -305,7 +279,7 @@ async def test_send_uses_default_retry_after_when_header_missing() -> None:
         httpx2.Response(429),
         httpx2.Response(200, json={"id": "x"}),
     ]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act
     await _send_once(captured, responses, "hello", sleep=sleep)
@@ -320,7 +294,7 @@ async def test_send_raises_after_second_429() -> None:
     # Arrange
     captured: list[httpx2.Request] = []
     responses = [httpx2.Response(429), httpx2.Response(429)]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act / Assert
     with pytest.raises(httpx2.HTTPStatusError):
@@ -337,7 +311,7 @@ async def test_send_uses_default_retry_after_when_header_is_garbage() -> None:
         httpx2.Response(429, headers={"Retry-After": "soon"}),
         httpx2.Response(200, json={"id": "x"}),
     ]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act
     await _send_once(captured, responses, "hello", sleep=sleep)

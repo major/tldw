@@ -7,6 +7,7 @@ from urllib.parse import quote
 import httpx2
 import pytest
 
+from helpers import make_capturing_transport
 from tldw.hub import (
     DEFAULT_LEASE_SECONDS,
     HUB_URL,
@@ -127,11 +128,7 @@ async def test_subscribe_posts_form_to_hub_and_returns_202() -> None:
     full_topic = topic_url(CHANNEL_ID)
     expected_topic = quote(full_topic, safe="")
 
-    async def handler(request: httpx2.Request) -> httpx2.Response:
-        captured.append(request)
-        return httpx2.Response(202)
-
-    transport = httpx2.MockTransport(handler)
+    transport = make_capturing_transport(captured, default_status=202)
 
     # Act
     async with httpx2.AsyncClient(transport=transport) as client:
@@ -160,11 +157,7 @@ async def test_subscribe_includes_secret_when_configured() -> None:
     captured: list[httpx2.Request] = []
     secret = "topsecret"
 
-    async def handler(request: httpx2.Request) -> httpx2.Response:
-        captured.append(request)
-        return httpx2.Response(202)
-
-    transport = httpx2.MockTransport(handler)
+    transport = make_capturing_transport(captured, default_status=202)
 
     # Act
     async with httpx2.AsyncClient(transport=transport) as client:
@@ -179,10 +172,9 @@ async def test_subscribe_includes_secret_when_configured() -> None:
 async def test_subscribe_raises_on_non_2xx() -> None:
     """A non-2xx hub response surfaces as an HTTPStatusError."""
     # Arrange
-    async def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(400, text="bad topic")
-
-    transport = httpx2.MockTransport(handler)
+    transport = make_capturing_transport(
+        [], default_status=400, default_text="bad topic"
+    )
 
     # Act
     async with httpx2.AsyncClient(transport=transport) as client:

@@ -22,7 +22,12 @@ import pydantic_ai.exceptions
 import pytest
 from pydantic import ValidationError
 
-from helpers import make_settings, make_video_entry
+from helpers import (
+    make_settings,
+    make_takeaways,
+    make_video_entry,
+    noop_sleep,
+)
 from tldw.audio import DownloadResult
 from tldw.config import Settings
 from tldw.llm import OpenAIAnalyzer, Takeaways
@@ -75,24 +80,6 @@ def _read_row(tmp_path: Path, video_id: str) -> sqlite3.Row:
         return row
     finally:
         conn.close()
-
-
-def _takeaways() -> Takeaways:
-    """Build a valid three-item Takeaways model for the fake analyzer."""
-    return Takeaways.model_validate(
-        {
-            "items": [
-                {
-                    "title": f"Takeaway {i}",
-                    "summary": f"Summary {i}",
-                    "bullets": [
-                        {"text": f"Bullet {i}", "timestamp_seconds": i * 30}
-                    ],
-                }
-                for i in range(3)
-            ]
-        }
-    )
 
 
 def _download_should_not_run(*args: object, **kwargs: object) -> DownloadResult:
@@ -159,11 +146,6 @@ class FakeAnalyze:
         return self.result
 
 
-async def _noop_sleep(_delay: float) -> None:
-    """Sleep stub for per-record tests that never need to wait."""
-    return None
-
-
 async def _run(
     queue_store: QueueStore,
     tmp_path: Path,
@@ -187,7 +169,7 @@ async def _run(
         analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        sleep=_noop_sleep,
+        sleep=noop_sleep,
         now=now,
     )
 
@@ -211,7 +193,11 @@ async def test_llm_success_sends_embeds_and_marks_done(
     _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
-    analyzer = FakeAnalyze(result=_takeaways())
+    analyzer = FakeAnalyze(
+        result=make_takeaways(
+            bullet_text="Bullet {i}", bullet_times=[[0], [30], [60]]
+        )
+    )
 
     # Act
     await _run(
@@ -417,22 +403,6 @@ async def test_live_openai_analyzer_returns_takeaways() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _takeaways_without_timestamps() -> Takeaways:
-    """Build a valid three-item Takeaways with no bullet timestamps."""
-    return Takeaways.model_validate(
-        {
-            "items": [
-                {
-                    "title": f"Takeaway {i}",
-                    "summary": f"Summary {i}",
-                    "bullets": [{"text": f"Bullet {i}"}],
-                }
-                for i in range(3)
-            ]
-        }
-    )
-
-
 async def test_takeaways_without_timestamps_render_plain(
     queue_store: QueueStore, tmp_path: Path
 ) -> None:
@@ -447,7 +417,7 @@ async def test_takeaways_without_timestamps_render_plain(
     _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
-    analyzer = FakeAnalyze(result=_takeaways_without_timestamps())
+    analyzer = FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}"))
 
     # Act
     await _run(

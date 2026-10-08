@@ -28,7 +28,7 @@ from pydantic_ai.messages import (  # noqa: E402
 )
 from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel  # noqa: E402
 
-from helpers import make_settings  # noqa: E402
+from helpers import make_settings, make_takeaways  # noqa: E402
 from tldw.config import Settings  # noqa: E402
 from tldw.llm import (  # noqa: E402
     SYSTEM_PROMPT,
@@ -234,29 +234,6 @@ def test_openai_analyzer_requires_api_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _takeaways_with_bullet_times(bullet_times: list[list[int]]) -> Takeaways:
-    """Build valid Takeaways where each item's bullets use the given times.
-
-    ``Takeaways`` enforces exactly three items, so ``bullet_times`` must hold
-    three inner lists. Each inner list is one takeaway's bullet timestamps.
-    """
-    return Takeaways.model_validate(
-        {
-            "items": [
-                {
-                    "title": f"Takeaway {i}",
-                    "summary": f"Summary {i}",
-                    "bullets": [
-                        {"text": f"Bullet {i}-{n}", "timestamp_seconds": seconds}
-                        for n, seconds in enumerate(times)
-                    ],
-                }
-                for i, times in enumerate(bullet_times)
-            ]
-        }
-    )
-
-
 def _all_bullet_timestamps(takeaways: Takeaways) -> list[int | None]:
     """Return every bullet timestamp across all items, in item then bullet order."""
     return [
@@ -271,7 +248,7 @@ class TestSnapTimestamps:
 
     def test_snap_to_exact_match(self) -> None:
         """A bullet whose timestamp exactly matches a cue start is unchanged."""
-        takeaways = _takeaways_with_bullet_times([[60], [60], [60]])
+        takeaways = make_takeaways(bullet_times=[[60], [60], [60]])
         cues = [
             Cue(start=0.0, text="a"),
             Cue(start=60.0, text="b"),
@@ -284,7 +261,7 @@ class TestSnapTimestamps:
 
     def test_snap_to_nearest(self) -> None:
         """A bullet between two cues snaps to the nearer one."""
-        takeaways = _takeaways_with_bullet_times([[75], [75], [75]])
+        takeaways = make_takeaways(bullet_times=[[75], [75], [75]])
         cues = [
             Cue(start=0.0, text="a"),
             Cue(start=60.0, text="b"),
@@ -297,7 +274,7 @@ class TestSnapTimestamps:
 
     def test_snap_below_first_cue(self) -> None:
         """A bullet before all cues snaps to the first cue."""
-        takeaways = _takeaways_with_bullet_times([[10], [10], [10]])
+        takeaways = make_takeaways(bullet_times=[[10], [10], [10]])
         cues = [Cue(start=60.0, text="a"), Cue(start=120.0, text="b")]
 
         # The 50s drift is over the default 30s limit, so raise the limit to
@@ -308,7 +285,7 @@ class TestSnapTimestamps:
 
     def test_snap_above_last_cue(self) -> None:
         """A bullet after all cues snaps to the last cue."""
-        takeaways = _takeaways_with_bullet_times([[999], [999], [999]])
+        takeaways = make_takeaways(bullet_times=[[999], [999], [999]])
         cues = [Cue(start=0.0, text="a"), Cue(start=60.0, text="b")]
 
         # The 939s drift is over the default 30s limit, so raise the limit to
@@ -321,7 +298,7 @@ class TestSnapTimestamps:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """A bullet far from any cue is kept as-is and logs a WARNING."""
-        takeaways = _takeaways_with_bullet_times([[999], [999], [999]])
+        takeaways = make_takeaways(bullet_times=[[999], [999], [999]])
         cues = [
             Cue(start=0.0, text="a"),
             Cue(start=60.0, text="b"),
@@ -336,7 +313,7 @@ class TestSnapTimestamps:
 
     def test_empty_cues_returns_unchanged(self) -> None:
         """Empty cues list returns the takeaways unchanged."""
-        takeaways = _takeaways_with_bullet_times([[10], [20], [30]])
+        takeaways = make_takeaways(bullet_times=[[10], [20], [30]])
 
         result = snap_timestamps(takeaways, [])
 
@@ -344,7 +321,9 @@ class TestSnapTimestamps:
 
     def test_multiple_takeaways_all_processed(self) -> None:
         """All takeaways and all bullets are processed; structure preserved."""
-        takeaways = _takeaways_with_bullet_times([[10, 70], [15, 75], [20, 80]])
+        takeaways = make_takeaways(
+            bullet_count=2, bullet_times=[[10, 70], [15, 75], [20, 80]]
+        )
         cues = [
             Cue(start=0.0, text="a"),
             Cue(start=60.0, text="b"),
@@ -386,25 +365,9 @@ def test_takeaway_bullet_rejects_negative_timestamp_when_set() -> None:
         TakeawayBullet(text="x", timestamp_seconds=-1)
 
 
-def _takeaways_with_none_bullets() -> Takeaways:
-    """Build valid Takeaways where every bullet has no timestamp."""
-    return Takeaways.model_validate(
-        {
-            "items": [
-                {
-                    "title": f"Takeaway {i}",
-                    "summary": f"Summary {i}",
-                    "bullets": [{"text": f"Bullet {i}", "timestamp_seconds": None}],
-                }
-                for i in range(3)
-            ]
-        }
-    )
-
-
 def test_snap_timestamps_preserves_none_values() -> None:
     """Bullets with no timestamp pass through snap_timestamps unchanged."""
-    takeaways = _takeaways_with_none_bullets()
+    takeaways = make_takeaways(bullet_text="Bullet {i}")
     cues = [Cue(start=0.0, text="a"), Cue(start=60.0, text="b")]
 
     result = snap_timestamps(takeaways, cues)

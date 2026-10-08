@@ -11,6 +11,7 @@ import re
 
 import pytest
 
+from helpers import make_takeaways
 from tldw.discord import _format_bullet, build_takeaway_embed, build_takeaway_embeds
 from tldw.llm import Takeaway, TakeawayBullet, Takeaways
 
@@ -19,30 +20,26 @@ _VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 _CHANNEL = "Test Channel"
 _DEFAULT_COLOR = 0x5865F2
 
-
-def _make_takeaways(
-    *,
-    bullet_count: int = 2,
-    bullet_text: str | None = None,
-    summary: str = "Short summary",
-) -> Takeaways:
-    """Build a valid Takeaways with three items and configurable bullets."""
-    items = []
-    for i in range(3):
-        bullets = [
-            {
-                "text": bullet_text if bullet_text is not None else f"Bullet {i}-{n}",
-                "timestamp_seconds": i * 60 + n * 15,
-            }
-            for n in range(bullet_count)
-        ]
-        items.append({"title": f"Title {i}", "summary": summary, "bullets": bullets})
-    return Takeaways.model_validate({"items": items})
+# The embed tests historically built takeaways with "Title {i}" titles,
+# "Short summary" summaries, and timestamps i*60 + n*15. These constants
+# keep the callsites readable now that the builder lives in tests/helpers.
+_EMBED_TITLE = "Title {i}"
+_EMBED_SUMMARY = "Short summary"
+_TIMES_2: list[list[int | None]] = [[0, 15], [60, 75], [120, 135]]
+_TIMES_3: list[list[int | None]] = [[0, 15, 30], [60, 75, 90], [120, 135, 150]]
 
 
 def _embed(takeaways: Takeaways | None = None, *, index: int = 1) -> dict:
     """Build one embed from the first takeaway of the given model."""
-    model = takeaways if takeaways is not None else _make_takeaways()
+    if takeaways is not None:
+        model = takeaways
+    else:
+        model = make_takeaways(
+            bullet_count=2,
+            title_template=_EMBED_TITLE,
+            summary_template=_EMBED_SUMMARY,
+            bullet_times=_TIMES_2,
+        )
     return build_takeaway_embed(
         model.items[0],
         video_id=_VIDEO_ID,
@@ -87,7 +84,12 @@ def test_build_takeaway_embed_footer_text() -> None:
 
 def test_build_takeaway_embed_description_starts_with_summary() -> None:
     """The description opens with the takeaway summary."""
-    takeaways = _make_takeaways(summary="A crisp summary")
+    takeaways = make_takeaways(
+        bullet_count=2,
+        title_template=_EMBED_TITLE,
+        summary_template="A crisp summary",
+        bullet_times=_TIMES_2,
+    )
     embed = _embed(takeaways)
 
     assert embed["description"].startswith("A crisp summary")
@@ -95,7 +97,12 @@ def test_build_takeaway_embed_description_starts_with_summary() -> None:
 
 def test_build_takeaway_embed_has_one_bullet_line_per_bullet() -> None:
     """Every bullet becomes one markdown bullet line."""
-    takeaways = _make_takeaways(bullet_count=2)
+    takeaways = make_takeaways(
+        bullet_count=2,
+        title_template=_EMBED_TITLE,
+        summary_template=_EMBED_SUMMARY,
+        bullet_times=_TIMES_2,
+    )
     embed = _embed(takeaways)
 
     bullet_lines = [
@@ -106,7 +113,12 @@ def test_build_takeaway_embed_has_one_bullet_line_per_bullet() -> None:
 
 def test_build_takeaway_embed_bullet_links_match_deep_link_shape() -> None:
     """Each bullet links to the video at the bullet's timestamp."""
-    takeaways = _make_takeaways(bullet_count=3)
+    takeaways = make_takeaways(
+        bullet_count=3,
+        title_template=_EMBED_TITLE,
+        summary_template=_EMBED_SUMMARY,
+        bullet_times=_TIMES_3,
+    )
     embed = _embed(takeaways)
 
     links = re.findall(r"\((https://youtu\.be/[^)]+)\)", embed["description"])
@@ -117,7 +129,13 @@ def test_build_takeaway_embed_bullet_links_match_deep_link_shape() -> None:
 
 def test_build_takeaway_embed_truncates_oversized_description() -> None:
     """A description over 4096 chars is truncated to 4096 with an ellipsis."""
-    takeaways = _make_takeaways(bullet_text="x" * 5000)
+    takeaways = make_takeaways(
+        bullet_count=2,
+        title_template=_EMBED_TITLE,
+        summary_template=_EMBED_SUMMARY,
+        bullet_text="x" * 5000,
+        bullet_times=_TIMES_2,
+    )
     embed = _embed(takeaways)
 
     description = embed["description"]
@@ -166,7 +184,12 @@ def test_build_takeaway_embed_truncates_oversized_title() -> None:
 def test_build_takeaway_embeds_returns_one_per_item() -> None:
     """Three takeaways produce exactly three embeds."""
     embeds = build_takeaway_embeds(
-        _make_takeaways(),
+        make_takeaways(
+            bullet_count=2,
+            title_template=_EMBED_TITLE,
+            summary_template=_EMBED_SUMMARY,
+            bullet_times=_TIMES_2,
+        ),
         video_id=_VIDEO_ID,
         video_url=_VIDEO_URL,
         channel_name=_CHANNEL,
@@ -179,7 +202,12 @@ def test_build_takeaway_embeds_returns_one_per_item() -> None:
 def test_build_takeaway_embeds_footer_uses_position(index: int) -> None:
     """Each embed's footer reports its 1-based position out of the total."""
     embeds = build_takeaway_embeds(
-        _make_takeaways(),
+        make_takeaways(
+            bullet_count=2,
+            title_template=_EMBED_TITLE,
+            summary_template=_EMBED_SUMMARY,
+            bullet_times=_TIMES_2,
+        ),
         video_id=_VIDEO_ID,
         video_url=_VIDEO_URL,
         channel_name=_CHANNEL,
@@ -191,7 +219,13 @@ def test_build_takeaway_embeds_footer_uses_position(index: int) -> None:
 def test_build_takeaway_embeds_total_chars_under_limit() -> None:
     """A typical three-takeaway message stays under Discord's 6000 char total."""
     embeds = build_takeaway_embeds(
-        _make_takeaways(bullet_count=3, bullet_text="y" * 80),
+        make_takeaways(
+            bullet_count=3,
+            title_template=_EMBED_TITLE,
+            summary_template=_EMBED_SUMMARY,
+            bullet_text="y" * 80,
+            bullet_times=_TIMES_3,
+        ),
         video_id=_VIDEO_ID,
         video_url=_VIDEO_URL,
         channel_name=_CHANNEL,

@@ -14,21 +14,22 @@ Both functions are blocking. The worker calls them through
 ``asyncio.to_thread(...)`` so the event loop keeps serving requests while
 yt-dlp waits on the network or ffmpeg grinds on the CPU.
 
-The download result reuses the ``ProbeState`` enum from ``tldw.transcript`` so
-the worker state machine does not need a second vocabulary for the same
-outcomes (READY, NOT_READY, UNAVAILABLE, RATE_LIMITED).
+The download result uses the ``ProbeState`` enum this module owns so the worker
+state machine does not need a second vocabulary for the same outcomes (READY,
+NOT_READY, UNAVAILABLE, RATE_LIMITED).
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from types import TracebackType
+from typing import Protocol, cast
 from urllib.parse import parse_qs, urlparse
-
-from tldw.transcript import ProbeState, YoutubeDLProtocol, classify_error
 
 __all__ = [
     "ProbeState",
@@ -43,6 +44,63 @@ __all__ = [
 # the scan prefers them. The extractor's reported ``info["ext"]`` is not
 # reliable for the on-disk name, so the file is located by globbing instead.
 _AUDIO_EXTS = ("webm", "m4a", "mp4", "opus", "mkv")
+
+# These are the exact yt-dlp error fragments we have seen live, in match
+# priority order. A 429 is transient, an unavailable video is permanent, and a
+# missing PO token means the request was rejected before the media was even
+# considered, so it is retryable rather than a hard failure.
+_RE_429 = re.compile(r"HTTP Error 429|Too Many Requests|RequestBlocked")
+_RE_UNAVAILABLE = re.compile(
+    r"This video is unavailable|Private video|"
+    r"Sign in to confirm you're not a bot|terminated|removed"
+)
+_RE_PO_TOKEN = re.compile(r"PO Token was not provided|PO token was not provided")
+
+
+class YoutubeDLProtocol(Protocol):
+    """Subset of yt_dlp.YoutubeDL the download uses. Lets tests inject fakes."""
+
+    def __enter__(self) -> YoutubeDLProtocol: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool: ...
+
+    def extract_info(self, url: str, download: bool = True) -> dict[str, object]: ...
+
+
+class ProbeState(StrEnum):
+    """Outcome of one download, from the worker's point of view.
+
+    READY, NOT_READY, and RATE_LIMITED are all retryable in their own way, while
+    UNAVAILABLE is permanent. The worker maps these onto queue terminal states.
+    """
+
+    READY = "READY"  # media file written
+    NOT_READY = "NOT_READY"  # no media; either pending or never (worker decides)
+    UNAVAILABLE = "UNAVAILABLE"  # video private/removed/bot-checked; permanent
+    RATE_LIMITED = "RATE_LIMITED"  # HTTP 429; transient
+
+
+def classify_error(message: str) -> tuple[ProbeState, str]:
+    """Map a yt-dlp error message to ``(ProbeState, short detail)``.
+
+    Priority is 429, then unavailable, then missing PO token, then an unknown
+    fallback. The fallback is NOT_READY rather than a hard failure: a message we
+    have never seen is far more likely to be a transient extractor quirk than a
+    permanently dead video. Callers that need to distinguish will see the raw
+    message in the detail.
+    """
+    if _RE_429.search(message):
+        return ProbeState.RATE_LIMITED, "rate_limited"
+    if _RE_UNAVAILABLE.search(message):
+        return ProbeState.UNAVAILABLE, "unavailable"
+    if _RE_PO_TOKEN.search(message):
+        return ProbeState.NOT_READY, "po_token"
+    return ProbeState.NOT_READY, f"unknown:{message}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,8 +125,8 @@ def build_audio_ydl_opts(
 
     The format chain prefers an audio-only webm, then an audio-only m4a, then
     any audio-only stream, and ``format_sort`` breaks ties toward the smallest
-    bitrate and size. The player client ladder matches the VTT fix in
-    ``tldw.transcript``; ``tv_embedded`` was removed in 2026.
+    bitrate and size. The player client ladder starts with ``visionos``;
+    ``tv_embedded`` was removed in 2026.
 
     ``cookies_file`` is added as ``cookiefile`` only when provided, so an
     unauthenticated download sends no cookie header at all.
@@ -87,8 +145,8 @@ def build_audio_ydl_opts(
         # worker marks the record NOT_READY and reschedules it.
         "ignore_no_formats_error": True,
         # Cluster egress IPs are commonly bot-checked on the default web client
-        # but accepted on mobile or embedded clients. Same ladder as the VTT
-        # probe: visionos first, then web_safari, tv, mweb, web_embedded.
+        # but accepted on mobile or embedded clients: visionos first, then
+        # web_safari, tv, mweb, web_embedded.
         "extractor_args": {
             "youtube": {
                 "player_client": [
@@ -111,8 +169,7 @@ def _audio_id_from_url(url: str) -> str:
 
     Handles ``watch?v=ID`` and the ``youtu.be/ID`` short form. Returns an empty
     string when neither shape yields an id, so the caller can skip the file
-    scan instead of globbing for everything. Re-implemented here (rather than
-    imported from ``tldw.transcript``) so the two modules stay independent.
+    scan instead of globbing for everything.
     """
     parsed = urlparse(url)
     values = parse_qs(parsed.query).get("v")
@@ -148,7 +205,7 @@ def download_audio(
     runs with ``download=True`` so yt-dlp fetches the chosen audio stream and
     writes it under the outtmpl directory.
 
-    Any yt-dlp error is classified through ``tldw.transcript.classify_error``
+    Any yt-dlp error is classified through ``classify_error``
     into a retryable or permanent state. When the call returns without an error
     but no file landed on disk, the result is NOT_READY so the worker retries.
     """

@@ -1,6 +1,7 @@
 """Tests for the worker's LLM takeaway path.
 
-Every I/O seam is injected: a fake probe, a fake plain ``send``, a fake
+Every I/O seam is injected: a fake download, compress, and transcribe (none of
+which should run for a cached transcript), a fake plain ``send``, a fake
 ``send_embeds``, and a fake ``analyze``. The queue is a real ``QueueStore`` on a
 ``tmp_path`` database so the terminal-state and detail assertions read real
 persisted rows. No test touches the network or waits on a real sleep.
@@ -21,12 +22,12 @@ import pydantic_ai.exceptions
 import pytest
 from pydantic import ValidationError
 
+from tldw.audio import DownloadResult
 from tldw.config import Settings
 from tldw.feed import VideoEntry
 from tldw.llm import OpenAIAnalyzer, Takeaways
-from tldw.queue import QueueRecord, QueueStore, TerminalState, open_store
-from tldw.transcript import ProbeResult, ProbeState
-from tldw.worker import _process_record
+from tldw.queue import QueueRecord, QueueStore, open_store
+from tldw.worker import _process_record_audio
 
 _VIDEO_ID = "dQw4w9WgXcQ"
 
@@ -68,23 +69,17 @@ def store(tmp_path: Path) -> Iterator[QueueStore]:
     queue_store.close()
 
 
-def _write_vtt(tmp_path: Path, video_id: str) -> Path:
-    """Write a small VTT file with one cue and return its path."""
-    path = tmp_path / f"{video_id}.en.vtt"
-    path.write_text(
-        "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello transcript\n",
-        encoding="utf-8",
-    )
+def _write_txt(tmp_path: Path, video_id: str) -> Path:
+    """Write a small ``.txt`` transcript file and return its path."""
+    path = tmp_path / f"{video_id}.txt"
+    path.write_text("Hello transcript\n", encoding="utf-8")
     return path
 
 
-def _write_vtt_without_cues(tmp_path: Path, video_id: str) -> Path:
-    """Write a VTT file that parses to zero cues (a header plus a NOTE)."""
-    path = tmp_path / f"{video_id}.en.vtt"
-    path.write_text(
-        "WEBVTT\n\nNOTE this comment carries no transcript text\n",
-        encoding="utf-8",
-    )
+def _write_empty_txt(tmp_path: Path, video_id: str) -> Path:
+    """Write an empty ``.txt`` transcript so the LLM stage sees no text."""
+    path = tmp_path / f"{video_id}.txt"
+    path.write_text("", encoding="utf-8")
     return path
 
 
@@ -137,9 +132,19 @@ def _takeaways() -> Takeaways:
     )
 
 
-def _probe_should_not_run(*args: object, **kwargs: object) -> ProbeResult:
-    """Probe fake that fails the test if it is ever called."""
-    raise AssertionError("probe should not have been called")
+def _download_should_not_run(*args: object, **kwargs: object) -> DownloadResult:
+    """Download fake that fails the test if it is ever called."""
+    raise AssertionError("download should not have been called")
+
+
+def _compress_should_not_run(*args: object, **kwargs: object) -> Path:
+    """Compress fake that fails the test if it is ever called."""
+    raise AssertionError("compress should not have been called")
+
+
+async def _transcribe_should_not_run(*args: object, **kwargs: object) -> str:
+    """Transcribe fake that fails the test if it is ever called."""
+    raise AssertionError("transcribe should not have been called")
 
 
 class CountingSend:
@@ -206,18 +211,19 @@ async def _run(
     sender: CountingSend,
     embeds_sender: CountingSendEmbeds,
 ) -> None:
-    """Drive _process_record for one cached-transcript record."""
+    """Drive _process_record_audio for one cached-transcript record."""
     record = _fetch(store, now)
-    await _process_record(
+    await _process_record_audio(
         record,
         settings,
         store,
         httpx2.AsyncClient(),
-        opts={},
-        probe=_probe_should_not_run,
+        download_audio=_download_should_not_run,
+        compress_audio=_compress_should_not_run,
+        transcribe=_transcribe_should_not_run,
+        analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        analyze=analyze,
         sleep=_noop_sleep,
         now=now,
     )
@@ -235,7 +241,7 @@ async def test_llm_success_sends_embeds_and_marks_done(
     # Arrange
     settings = _make_settings(tmp_path)
     now = 1000.0
-    _enqueue_with_path(store, _write_vtt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(result=_takeaways())
@@ -273,7 +279,7 @@ async def test_no_api_key_skips_analysis_and_sends_plain(
     # Arrange
     settings = _make_settings(tmp_path, openai_api_key=None)
     now = 1000.0
-    _enqueue_with_path(store, _write_vtt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(raises=AssertionError("analyze should not have run"))
@@ -301,11 +307,11 @@ async def test_no_api_key_skips_analysis_and_sends_plain(
 async def test_empty_transcript_skips_analysis_and_sends_plain(
     store: QueueStore, tmp_path: Path
 ) -> None:
-    """A transcript with no cues skips the LLM and sends the plain digest."""
+    """An empty transcript skips the LLM and sends the plain digest."""
     # Arrange
     settings = _make_settings(tmp_path)
     now = 1000.0
-    path = _write_vtt_without_cues(tmp_path, _VIDEO_ID)
+    path = _write_empty_txt(tmp_path, _VIDEO_ID)
     _enqueue_with_path(store, path, _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
@@ -328,7 +334,7 @@ async def test_empty_transcript_skips_analysis_and_sends_plain(
     assert embeds_sender.calls == 0
     row = _read_row(tmp_path, _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
-    assert row["detail"] is None
+    assert row["detail"] == "empty_transcript"
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +381,7 @@ async def test_llm_failure_falls_back_to_plain_digest(
     # Arrange
     settings = _make_settings(tmp_path)
     now = 1000.0
-    _enqueue_with_path(store, _write_vtt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(raises=exc)
@@ -455,7 +461,7 @@ async def test_takeaways_without_timestamps_render_plain(
     # Arrange
     settings = _make_settings(tmp_path)
     now = 1000.0
-    _enqueue_with_path(store, _write_vtt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(result=_takeaways_without_timestamps())

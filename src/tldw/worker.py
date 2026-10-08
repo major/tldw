@@ -1,29 +1,31 @@
 """Background worker that drains the transcript queue.
 
 This module is the heartbeat of the transcript pipeline. It runs forever,
-pulling one record at a time out of the SQLite queue, asking yt-dlp whether the
-transcript is ready, and posting the digest to Discord when it is.
+pulling one record at a time out of the SQLite queue, downloading the video's
+audio track with yt-dlp, compressing it with ffmpeg, transcribing it with
+OpenAI, and posting the takeaways to Discord.
 
 The design is deliberately serial. One worker, one record, one YouTube request
 at a time is the main defense against rate limiting: a burst of notifications
 for a freshly published batch of videos cannot thunder the extractor. A small
 pacing sleep between records adds a second layer for a full backlog.
 
-Crash safety comes from ordering. Before the blocking probe runs, the record's
-attempt count and last-attempt time are written to disk. If the process is
-killed mid-probe, the row is already rescheduled and will be picked up again
-instead of being stuck as if the attempt never happened.
+Crash safety comes from ordering. Before the blocking download runs, the
+record's attempt count and last-attempt time are written to disk, and each
+stage's artifact (compressed audio, then the ``.txt`` transcript) is persisted
+before the next stage runs. If the process is killed mid-stage, the row is
+already rescheduled and will resume at the last completed artifact instead of
+being stuck as if the attempt never happened.
 
-The queue caches the transcript path on the record. Once a subtitle file is on
-disk, later passes skip the probe and go straight to reading, parsing, and
-sending. That means a Discord outage costs retries against Discord, never
-against the YouTube request budget.
+The queue caches the transcript path on the record. Once the ``.txt``
+transcript is on disk, later passes skip download, compress, and transcribe and
+go straight to the LLM and send. That means a Discord outage costs retries
+against Discord, never against the YouTube request budget.
 
 Two terminal outcomes are not failures of the process. A video whose enqueue
 time is older than ``giveup_seconds`` (48 hours by default) is marked
-GIVE_UP_NEVER: to yt-dlp, "captions still pending" and "captions will never
-come" look identical, and the cutoff is how we tell them apart. A video that
-hits the rate limit ``DEFAULT_MAX_RATE_LIMIT_ATTEMPTS`` times in a row is marked
+GIVE_UP_NEVER. A video that hits the rate limit
+``DEFAULT_MAX_RATE_LIMIT_ATTEMPTS`` times in a row is marked
 GIVE_UP_RATE_LIMITED_DEAD so a dead rate-limit budget stops consuming the loop.
 """
 
@@ -44,6 +46,7 @@ import pydantic_ai.exceptions
 from tldw.audio import (
     CompressError,
     DownloadResult,
+    ProbeState,
     build_audio_ydl_opts,
     compress_audio,
 )
@@ -53,20 +56,9 @@ from tldw.config import Settings
 from tldw.discord import build_takeaway_embeds, format_message
 from tldw.discord import send as discord_send
 from tldw.discord import send_embeds as discord_send_embeds
-from tldw.llm import OpenAIAnalyzer, TakeawayAnalyzer, Takeaways, snap_timestamps
+from tldw.llm import OpenAIAnalyzer, TakeawayAnalyzer, Takeaways
 from tldw.queue import QueueRecord, QueueStore, TerminalState
 from tldw.transcribe import TranscribeError, transcribe
-from tldw.transcript import (
-    Cue,
-    ProbeResult,
-    ProbeState,
-    build_ydl_opts,
-    first_lines,
-    parse_srt_timed,
-    parse_vtt_timed,
-    render_transcript_for_llm,
-)
-from tldw.transcript import probe_and_fetch as transcript_probe
 
 __all__ = ["transcript_loop"]
 
@@ -83,23 +75,20 @@ DEFAULT_RECORD_PACING: float = 5.0
 # 3600s, seven waits total roughly 4 hours before the eighth 429 trips.
 DEFAULT_MAX_RATE_LIMIT_ATTEMPTS: int = 8
 
-# Type aliases for the injectable seams. The probe and send signatures are left
-# open (``...``) because the real implementations use keyword-only arguments;
-# tests inject callables with the same shape.
+# Type aliases for the injectable seams. The download and compress signatures
+# are left open (``...``) because the real implementations use keyword-only
+# arguments; tests inject callables with the same shape.
 SleepFn = Callable[[float], Awaitable[None]]
-ProbeFn = Callable[..., ProbeResult]
 SendFn = Callable[..., Awaitable[None]]
 SendEmbedsFn = Callable[..., Awaitable[None]]
 AnalyzeFn = Callable[[str, str, str], Awaitable[Takeaways]]
 """Signature: (rendered_transcript, video_id, title) -> Takeaways."""
 DownloadAudioFn = Callable[..., DownloadResult]
-"""Signature mirrors ProbeFn; the real call is kwarg-only, tests inject the same shape."""
+"""Signature mirrors the real download; the real call is kwarg-only, tests inject the same shape."""
 CompressAudioFn = Callable[..., Path]
-"""Signature mirrors ProbeFn; the real call is kwarg-only, tests inject the same shape."""
+"""Signature mirrors the real compress; the real call is kwarg-only, tests inject the same shape."""
 TranscribeFn = Callable[[Path], Awaitable[str]]
 """Signature: (audio_path) -> transcript text."""
-ProcessFn = Callable[..., Awaitable[None]]
-"""Signature: (record, settings, store, client, **seams) -> None."""
 
 
 def _default_analyze_factory(settings: Settings) -> AnalyzeFn:
@@ -144,7 +133,6 @@ async def transcript_loop(
     client: httpx2.AsyncClient,
     *,
     sleep: SleepFn = asyncio.sleep,
-    probe: ProbeFn = transcript_probe,
     send: SendFn = discord_send,
     send_embeds: SendEmbedsFn = discord_send_embeds,
     analyze: AnalyzeFn | None = None,
@@ -159,76 +147,41 @@ async def transcript_loop(
     catching and logging per-record exceptions so a single bad record never
     kills the loop.
 
-    The default ``probe`` and ``send`` are the real modules; tests inject fakes
-    through the keyword arguments. The default ``sleep`` is ``asyncio.sleep``.
-    ``analyze`` is resolved once from settings when not injected, so the LLM
-    seam can be faked in tests without touching the network.
-
-    ``transcript_backend`` selects the path. ``audio`` downloads and transcribes
-    the audio track and needs an OpenAI key; ``vtt`` keeps the historical
-    subtitle fetch. The two paths share ``_run_loop`` so pacing and crash
-    handling cannot drift apart.
+    The default ``send`` and ``send_embeds`` are the real modules; tests inject
+    fakes through the keyword arguments. The default ``sleep`` is
+    ``asyncio.sleep``. ``analyze``, ``transcribe``, ``download_audio``, and
+    ``compress_audio`` are resolved once from settings when not injected, so the
+    seams can be faked in tests without touching the network or the filesystem.
     """
     settings: Settings = app.state.settings
     if not settings.discord_webhook_url:
         logger.info("transcript worker skipping: TLDW_DISCORD_WEBHOOK_URL is not set")
         return
-    if settings.transcript_backend == "audio":
-        # The audio backend has no plain-digest fallback without a key: without
-        # it, transcription can never run, so the worker refuses to start.
-        if not settings.openai_api_key:
-            logger.error(
-                "audio backend requires TLDW_OPENAI_API_KEY; worker not starting"
-            )
-            return
-        if analyze is None:
-            analyze = _default_analyze_factory(settings)
-        if transcribe is None:
-            transcribe = _default_transcribe_factory(settings)
-        if download_audio is None:
-            download_audio = audio_download
-        if compress_audio is None:
-            compress_audio = _default_compress_audio()
-        settings.audio_dir.mkdir(parents=True, exist_ok=True)
-        await _run_loop(
-            app,
-            client,
-            settings,
-            sleep=sleep,
-            process=_process_record_audio,
-            process_kwargs={
-                "download_audio": download_audio,
-                "compress_audio": compress_audio,
-                "transcribe": transcribe,
-                "analyze": analyze,
-                "send": send,
-                "send_embeds": send_embeds,
-            },
-        )
+    # The audio backend has no plain-digest fallback without a key: without it,
+    # transcription can never run, so the worker refuses to start.
+    if not settings.openai_api_key:
+        logger.error("audio backend requires TLDW_OPENAI_API_KEY; worker not starting")
         return
-
-    # VTT backend: unchanged behavior.
     if analyze is None:
         analyze = _default_analyze_factory(settings)
-    settings.transcript_dir.mkdir(parents=True, exist_ok=True)
-    opts = build_ydl_opts(
-        settings.transcript_dir,
-        cookies_file=settings.ytdlp_cookies_file,
-        langs=tuple(settings.transcript_langs),
-    )
+    if transcribe is None:
+        transcribe = _default_transcribe_factory(settings)
+    if download_audio is None:
+        download_audio = audio_download
+    if compress_audio is None:
+        compress_audio = _default_compress_audio()
+    settings.audio_dir.mkdir(parents=True, exist_ok=True)
     await _run_loop(
         app,
         client,
         settings,
         sleep=sleep,
-        process=_process_record,
-        process_kwargs={
-            "opts": opts,
-            "probe": probe,
-            "send": send,
-            "send_embeds": send_embeds,
-            "analyze": analyze,
-        },
+        download_audio=download_audio,
+        compress_audio=compress_audio,
+        transcribe=transcribe,
+        analyze=analyze,
+        send=send,
+        send_embeds=send_embeds,
     )
 
 
@@ -238,16 +191,20 @@ async def _run_loop(
     settings: Settings,
     *,
     sleep: SleepFn,
-    process: ProcessFn,
-    process_kwargs: dict[str, object],
+    download_audio: DownloadAudioFn,
+    compress_audio: CompressAudioFn,
+    transcribe: TranscribeFn,
+    analyze: AnalyzeFn,
+    send: SendFn,
+    send_embeds: SendEmbedsFn,
 ) -> None:
-    """Run the shared serial drain loop for either backend.
+    """Run the serial drain loop.
 
     The store is resolved once from the app state. Each iteration pulls the
-    oldest due record and hands it to ``process`` with the shared seams, then
-    sleeps the per-record pacing. An empty queue sleeps the long empty-queue
-    interval. A per-record exception is logged and the loop moves on, so one
-    bad record can never kill the worker.
+    oldest due record and hands it to ``_process_record_audio`` with the shared
+    seams, then sleeps the per-record pacing. An empty queue sleeps the long
+    empty-queue interval. A per-record exception is logged and the loop moves
+    on, so one bad record can never kill the worker.
     """
     store: QueueStore = app.state.queue
 
@@ -264,13 +221,18 @@ async def _run_loop(
             continue
 
         try:
-            await process(
+            await _process_record_audio(
                 record,
                 settings,
                 store,
                 client,
+                download_audio=download_audio,
+                compress_audio=compress_audio,
+                transcribe=transcribe,
+                analyze=analyze,
+                send=send,
+                send_embeds=send_embeds,
                 sleep=sleep,
-                **process_kwargs,
             )
         except Exception:
             # A record that fails outside its own stage try blocks must not
@@ -279,314 +241,20 @@ async def _run_loop(
         await sleep(DEFAULT_RECORD_PACING)
 
 
-def _digest_lines(path: Path, n: int) -> list[str]:
-    """Return up to ``n`` blockquote-ready transcript lines from a subtitle file.
+def first_lines(text: str, n: int) -> list[str]:
+    """Return the first ``n`` non-empty lines of ``text``, each stripped.
 
-    Parses timed cues first so VTT headers and timing lines never reach the
-    digest. Unknown extensions, and any parse error, fall back to ``first_lines``.
+    Raises ValueError when ``n`` is negative, since that is a caller bug rather
+    than an empty result.
     """
-    raw_text = path.read_text(encoding="utf-8")
-    try:
-        if path.suffix == ".vtt":
-            cues = parse_vtt_timed(raw_text)
-        elif path.suffix == ".srt":
-            cues = parse_srt_timed(raw_text)
-        else:
-            return first_lines(raw_text, n)
-    except Exception:
-        # A malformed subtitle file must not crash the worker; degrade to the
-        # old raw-line behavior so the digest is still sent.
-        logger.warning("timed parse failed for %s, falling back to raw lines", path)
-        return first_lines(raw_text, n)
-    return [cue.text for cue in cues[:n]]
-
-
-def _parse_cues_for_llm(path: Path) -> list[Cue]:
-    """Parse timed cues from a subtitle file for the LLM path.
-
-    Returns an empty list for an unknown extension or any parse error, which the
-    caller treats as "no LLM input" and falls back to the plain digest.
-    """
-    try:
-        raw_text = path.read_text(encoding="utf-8")
-        if path.suffix == ".vtt":
-            return parse_vtt_timed(raw_text)
-        if path.suffix == ".srt":
-            return parse_srt_timed(raw_text)
-    except Exception:
-        logger.warning("timed parse failed for LLM path: %s", path)
-    return []
-
-
-async def _process_record(
-    record: QueueRecord,
-    settings: Settings,
-    store: QueueStore,
-    client: httpx2.AsyncClient,
-    *,
-    opts: dict[str, object],
-    probe: ProbeFn,
-    send: SendFn,
-    sleep: SleepFn,
-    now: float | None = None,
-    send_embeds: SendEmbedsFn = discord_send_embeds,
-    analyze: AnalyzeFn | None = None,
-) -> None:
-    """Process one queue record: probe (if needed), analyze, send, mark.
-
-    ``attempts`` is incremented exactly once per probe, by the pre-probe
-    ``mark_attempt`` call. Every later update goes through ``reschedule`` so a
-    single probe never counts as two attempts. The rate-limit streak is bumped
-    only on a RATE_LIMITED outcome and reset to zero on any other outcome,
-    which is what makes the give-up budget mean "consecutive 429s".
-
-    When ``openai_api_key`` is set the happy path runs the LLM analyzer and
-    posts takeaway embeds. A missing key, an empty transcript, or an LLM
-    failure falls back to the plain text digest. An LLM failure is not a probe,
-    so it never bumps ``attempts``.
-
-    ``now`` is the clock seam for tests and defaults to ``time.time()``.
-    ``sleep`` is accepted for symmetry with the other seams and so future
-    per-step pacing can use it without changing the signature.
-    """
-    if now is None:
-        now = time.time()
-
-    # 48 hour give-up. Measured from enqueued_at, not the video's publish time:
-    # the cutoff is about how long we have been trying, not how old the video is.
-    if now - record.enqueued_at > settings.giveup_seconds:
-        store.mark_terminal(
-            record.video_id,
-            TerminalState.GIVE_UP_NEVER,
-            detail=f"no transcript after {settings.giveup_seconds}s",
-        )
-        return
-
-    record_path: str | None
-    if record.transcript_path is None:
-        # Count the attempt BEFORE the blocking probe. This is the only place
-        # attempts is incremented, so one probe means one attempt. If the
-        # process is killed mid-probe the row is already marked as attempted
-        # and will be picked up again. jitter=0.0 keeps the schedule
-        # deterministic: the serial single worker needs no fleet de-sync.
-        store.mark_attempt(record.video_id, now=now)
-        try:
-            result = await asyncio.to_thread(
-                probe,
-                record.url,
-                opts=opts,
-                ydl_class=None,
-                dest_dir=settings.transcript_dir,
-            )
-        except Exception:
-            logger.exception("probe raised for %s", record.video_id)
-            delay = backoff_delay(
-                record.attempts + 1,
-                base=settings.poll_base_seconds,
-                cap=settings.poll_cap_seconds,
-                jitter=0.0,
-            )
-            store.reschedule(record.video_id, next_attempt_at=now + delay)
-            return
-
-        if result.state is ProbeState.READY:
-            store.reschedule(
-                record.video_id,
-                next_attempt_at=now + DEFAULT_RECORD_PACING,
-                transcript_path=result.transcript_path,
-                rate_limit_streak=0,
-            )
-            record_path = result.transcript_path
-            if record_path is not None:
-                try:
-                    _size = Path(record_path).stat().st_size
-                except OSError:
-                    _size = -1
-                logger.info(
-                    "transcript ready: video=%s path=%s size_bytes=%d",
-                    record.video_id,
-                    record_path,
-                    _size,
-                )
-            else:
-                logger.info(
-                    "transcript ready: video=%s path=None",
-                    record.video_id,
-                )
-        elif result.state is ProbeState.RATE_LIMITED:
-            # Count consecutive 429s on the row. Any other outcome below resets
-            # this to 0, so the give-up budget only trips on a real streak.
-            new_streak = record.rate_limit_streak + 1
-            if new_streak >= DEFAULT_MAX_RATE_LIMIT_ATTEMPTS:
-                store.mark_terminal(
-                    record.video_id,
-                    TerminalState.GIVE_UP_RATE_LIMITED_DEAD,
-                    detail=result.detail,
-                )
-            else:
-                delay = backoff_delay(
-                    new_streak,
-                    base=300.0,
-                    cap=settings.poll_cap_seconds,
-                    jitter=0.0,
-                )
-                store.reschedule(
-                    record.video_id,
-                    next_attempt_at=now + delay,
-                    rate_limit_streak=new_streak,
-                )
-            return
-        elif result.state is ProbeState.UNAVAILABLE:
-            store.mark_terminal(
-                record.video_id,
-                TerminalState.GIVE_UP_UNAVAILABLE,
-                detail=result.detail,
-            )
-            return
-        else:  # NOT_READY
-            delay = backoff_delay(
-                record.attempts + 1,
-                base=settings.poll_base_seconds,
-                cap=settings.poll_cap_seconds,
-                jitter=0.0,
-            )
-            store.reschedule(
-                record.video_id,
-                next_attempt_at=now + delay,
-                rate_limit_streak=0,
-            )
-            return
-    else:
-        # The subtitle file is already cached, so skip the probe entirely.
-        record_path = record.transcript_path
-        try:
-            _size = Path(record_path).stat().st_size
-        except OSError:
-            _size = -1
-        logger.info(
-            "using cached transcript: video=%s path=%s size_bytes=%d",
-            record.video_id,
-            record_path,
-            _size,
-        )
-
-    if record_path is None:
-        # A READY probe without a path should not happen; log and leave the
-        # record scheduled rather than crash on Path(None).
-        logger.warning("record %s has no transcript path to send", record.video_id)
-        return
-
-    path = Path(record_path)
-
-    async def _send_plain(detail: str | None) -> None:
-        """Send the plain text digest and mark the record DONE."""
-        lines = _digest_lines(path, settings.transcript_lines)
-        message = format_message(record.title, record.channel_name, record.url, lines)
-        logger.info(
-            "calling discord: video=%s kind=plain digest_lines=%d",
-            record.video_id,
-            len(lines),
-        )
-        _t0 = time.monotonic()
-        await send(client, settings.discord_webhook_url, message)
-        logger.info(
-            "called discord: video=%s kind=plain duration_s=%.2f",
-            record.video_id,
-            time.monotonic() - _t0,
-        )
-        store.mark_terminal(record.video_id, TerminalState.DONE, detail=detail)
-
-    # Try the LLM takeaway path when configured, then fall back to the plain
-    # digest for a missing key, an empty transcript, or any LLM failure.
-    try:
-        if settings.openai_api_key:
-            cues = _parse_cues_for_llm(path)
-            rendered = render_transcript_for_llm(cues)
-            if not rendered.strip():
-                # No usable cues: skipping the LLM is not a failure, so the
-                # record keeps the plain digest's no-detail marker.
-                logger.info(
-                    "no LLM transcript for %s, falling back to plain digest",
-                    record.video_id,
-                )
-                await _send_plain(detail=None)
-                return
-            resolved_analyze = analyze or _default_analyze_factory(settings)
-            logger.info(
-                "handing off to LLM: video=%s model=%s max_output_tokens=%d "
-                "transcript_chars=%d",
-                record.video_id,
-                settings.openai_model,
-                settings.llm_max_output_tokens,
-                len(rendered),
-            )
-            _llm_t0 = time.monotonic()
-            try:
-                takeaways = await resolved_analyze(
-                    rendered, record.video_id, record.title
-                )
-            except (
-                TimeoutError,
-                ValidationError,
-                openai.APIError,
-                openai.APIConnectionError,
-                pydantic_ai.exceptions.UnexpectedModelBehavior,
-            ) as exc:
-                # APIConnectionError is an APIError subclass; listing both is
-                # explicit about the failures we expect from the OpenAI API.
-                logger.warning(
-                    "LLM analysis failed for %s, falling back to plain digest: %s",
-                    record.video_id,
-                    exc,
-                )
-                await _send_plain(detail="llm_fallback")
-                return
-            _bullets = sum(len(t.bullets) for t in takeaways.items)
-            logger.info(
-                "LLM returned: video=%s takeaways=%d bullets=%d duration_s=%.2f",
-                record.video_id,
-                len(takeaways.items),
-                _bullets,
-                time.monotonic() - _llm_t0,
-            )
-            takeaways = snap_timestamps(takeaways, cues)
-            embeds = build_takeaway_embeds(
-                takeaways,
-                video_id=record.video_id,
-                video_url=record.url,
-                channel_name=record.channel_name,
-            )
-            logger.info(
-                "calling discord: video=%s kind=embeds embed_count=%d",
-                record.video_id,
-                len(embeds),
-            )
-            _discord_t0 = time.monotonic()
-            await send_embeds(client, settings.discord_webhook_url, embeds)
-            logger.info(
-                "called discord: video=%s kind=embeds duration_s=%.2f",
-                record.video_id,
-                time.monotonic() - _discord_t0,
-            )
-            store.mark_terminal(
-                record.video_id,
-                TerminalState.DONE,
-                detail="llm_embeds",
-            )
-            return
-        await _send_plain(detail=None)
-    except Exception:
-        logger.exception("send raised for %s", record.video_id)
-        delay = backoff_delay(
-            record.attempts + 1,
-            base=300.0,
-            cap=settings.poll_cap_seconds,
-            jitter=0.0,
-        )
-        # A send failure is not a probe, so it must not bump attempts. The
-        # cached transcript_path means the retry will not re-probe YouTube.
-        store.reschedule(record.video_id, next_attempt_at=now + delay)
-        return
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    lines: list[str] = []
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if stripped:
+            lines.append(stripped)
+    return lines[:n]
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +280,7 @@ async def _process_record_audio(
     """Process one record through the audio pipeline.
 
     Stage sequence:
-      1. 48h give-up (same as vtt).
+      1. 48h give-up.
       2. If transcript_path is set, read it and skip to LLM/send.
       3. If audio_path is set, skip download+compress and go to transcribe.
       4. Otherwise: mark_attempt(now), download_audio (to_thread).
@@ -631,7 +299,7 @@ async def _process_record_audio(
     Each stage's success is persisted before the next stage runs, so a crash
     resumes at the last completed artifact. ``now`` is the clock seam for tests
     and defaults to ``time.time()``. ``sleep`` is accepted for symmetry with
-    the vtt processor and so future per-step pacing can use it without a
+    the other seams and so future per-step pacing can use it without a
     signature change.
     """
     if now is None:
@@ -719,8 +387,8 @@ async def _download_stage(
 
     Returns the raw file path, or None when the worker should stop this pass
     (a terminal state was set or the record was rescheduled). The attempt is
-    counted before the blocking download, exactly like the vtt probe, so a
-    process killed mid-download still records the attempt.
+    counted before the blocking download, so a process killed mid-download
+    still records the attempt.
     """
     store.mark_attempt(record.video_id, now=now)
     opts = build_audio_ydl_opts(
@@ -1065,7 +733,7 @@ async def _llm_and_send_stage(
             cap=settings.poll_cap_seconds,
             jitter=0.0,
         )
-        # A send failure is not a probe, so it must not bump attempts. The
+        # A send failure is not a download, so it must not bump attempts. The
         # cached transcript_path means the retry will not re-download audio.
         store.reschedule(record.video_id, next_attempt_at=now + delay)
         return

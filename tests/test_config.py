@@ -5,10 +5,9 @@ These tests cover the two configuration sources for the channel list: the
 ``TLDW_CHANNELS_FILE``. They also pin down the YouTube channel id validation
 policy so malformed ids fail fast with a message the operator can act on.
 
-The audio pipeline settings (``TLDW_TRANSCRIPT_BACKEND``,
-``TLDW_AUDIO_*``, ``TLDW_TRANSCRIBE_*``, ``TLDW_FFMPEG_TIMEOUT_SECONDS``) live
-in the same ``Settings`` model and are tested in the ``test_audio_settings``
-group at the bottom of this file.
+The audio pipeline settings (``TLDW_AUDIO_*``, ``TLDW_TRANSCRIBE_*``,
+``TLDW_FFMPEG_TIMEOUT_SECONDS``) live in the same ``Settings`` model and are
+tested in the ``test_audio_settings`` group at the bottom of this file.
 """
 
 from __future__ import annotations
@@ -31,7 +30,6 @@ _TLDW_ENV_VARS = (
     "TLDW_CHANNELS_FILE",
     "TLDW_CHANNEL_IDS",
     "TLDW_HUB_SECRET",
-    "TLDW_TRANSCRIPT_BACKEND",
     "TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS",
     "TLDW_AUDIO_DIR",
     "TLDW_AUDIO_FORMAT",
@@ -300,7 +298,6 @@ def test_audio_settings_defaults(settings_kwargs: Callable[..., dict[str, Any]])
     settings = Settings(**settings_kwargs())
 
     # Assert
-    assert settings.transcript_backend == "audio"
     assert settings.audio_download_delay_seconds == 300.0
     assert settings.audio_dir == Path("audio")
     assert settings.audio_format == "webm"
@@ -317,7 +314,6 @@ def test_audio_settings_read_from_env(
 ) -> None:
     """Every audio env var overrides the corresponding default."""
     # Arrange
-    monkeypatch.setenv("TLDW_TRANSCRIPT_BACKEND", "vtt")
     monkeypatch.setenv("TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS", "120")
     monkeypatch.setenv("TLDW_AUDIO_DIR", "/var/cache/audio")
     monkeypatch.setenv("TLDW_AUDIO_FORMAT", "m4a")
@@ -331,7 +327,6 @@ def test_audio_settings_read_from_env(
     settings = Settings(**settings_kwargs())
 
     # Assert
-    assert settings.transcript_backend == "vtt"
     assert settings.audio_download_delay_seconds == 120.0
     assert settings.audio_dir == Path("/var/cache/audio")
     assert settings.audio_format == "m4a"
@@ -340,16 +335,6 @@ def test_audio_settings_read_from_env(
     assert settings.transcribe_model == "gpt-transcribe"
     assert settings.transcribe_langs == ["en", "es"]
     assert settings.transcribe_timeout_seconds == 120.0
-
-
-def test_transcript_backend_rejects_unknown_value(
-    settings_kwargs: Callable[..., dict[str, Any]],
-) -> None:
-    """A typo in TLDW_TRANSCRIPT_BACKEND fails fast at startup."""
-    # Arrange
-    # Act / Assert
-    with pytest.raises(ValidationError, match="transcript_backend"):
-        Settings(**settings_kwargs(transcript_backend="bogus"))
 
 
 def test_audio_format_rejects_unsupported_container(

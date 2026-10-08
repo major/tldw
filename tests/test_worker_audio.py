@@ -5,7 +5,7 @@ a fake analyze, fake sends, and a fake sleep. The queue is a real ``QueueStore``
 on a ``tmp_path`` database so terminal-state, schedule, and artifact assertions
 read real persisted rows. No test touches the network or waits on a real sleep.
 ``_process_record_audio`` is tested directly for the per-record state machine,
-and ``transcript_loop`` is tested for backend dispatch and the enqueue delay.
+and ``transcript_loop`` is tested for the enqueue delay.
 """
 
 from __future__ import annotations
@@ -22,12 +22,11 @@ import pytest
 from fastapi import FastAPI
 
 from tldw import worker
-from tldw.audio import CompressError, DownloadResult
+from tldw.audio import CompressError, DownloadResult, ProbeState
 from tldw.config import Settings
 from tldw.feed import VideoEntry
 from tldw.llm import Takeaways
 from tldw.queue import QueueRecord, QueueStore, open_store
-from tldw.transcript import ProbeState
 from tldw.transcribe import TranscribeError
 from tldw.worker import (
     DEFAULT_EMPTY_QUEUE_SLEEP,
@@ -69,7 +68,6 @@ def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "audio_dir": tmp_path / "audio",
         "queue_file": tmp_path / "queue.sqlite3",
         "openai_api_key": "sk-test",
-        "transcript_backend": "audio",
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -948,76 +946,16 @@ async def test_process_record_audio_uses_audio_settings_for_dest_dir_and_format(
 
 
 # ---------------------------------------------------------------------------
-# transcript_loop dispatch
+# transcript_loop guards and pacing
 # ---------------------------------------------------------------------------
 
 
-async def test_transcript_loop_dispatches_to_audio_when_backend_is_audio(
+async def test_transcript_loop_requires_openai_api_key(
     store: QueueStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The audio backend routes each record through _process_record_audio."""
+    """The worker returns before any work when the OpenAI key is missing."""
     # Arrange
-    settings = _make_settings(tmp_path, transcript_backend="audio")
-    app = _make_app(settings, store)
-    _enqueue(store, 1000.0)
-    called: list[str] = []
-
-    async def fake_audio(*args: object, **kwargs: object) -> None:
-        called.append("audio")
-
-    async def fake_vtt(*args: object, **kwargs: object) -> None:
-        called.append("vtt")
-
-    monkeypatch.setattr(worker, "_process_record_audio", fake_audio)
-    monkeypatch.setattr(worker, "_process_record", fake_vtt)
-
-    # Act
-    with pytest.raises(asyncio.CancelledError):
-        await transcript_loop(
-            app, httpx2.AsyncClient(), sleep=_counting_sleep([], cancel_after=1)
-        )
-
-    # Assert
-    assert called == ["audio"]
-
-
-async def test_transcript_loop_dispatches_to_vtt_when_backend_is_vtt(
-    store: QueueStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The vtt backend routes each record through _process_record."""
-    # Arrange
-    settings = _make_settings(tmp_path, transcript_backend="vtt")
-    app = _make_app(settings, store)
-    _enqueue(store, 1000.0)
-    called: list[str] = []
-
-    async def fake_audio(*args: object, **kwargs: object) -> None:
-        called.append("audio")
-
-    async def fake_vtt(*args: object, **kwargs: object) -> None:
-        called.append("vtt")
-
-    monkeypatch.setattr(worker, "_process_record_audio", fake_audio)
-    monkeypatch.setattr(worker, "_process_record", fake_vtt)
-
-    # Act
-    with pytest.raises(asyncio.CancelledError):
-        await transcript_loop(
-            app, httpx2.AsyncClient(), sleep=_counting_sleep([], cancel_after=1)
-        )
-
-    # Assert
-    assert called == ["vtt"]
-
-
-async def test_transcript_loop_audio_requires_openai_api_key(
-    store: QueueStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The audio backend returns before any work when the OpenAI key is missing."""
-    # Arrange
-    settings = _make_settings(
-        tmp_path, transcript_backend="audio", openai_api_key=None
-    )
+    settings = _make_settings(tmp_path, openai_api_key=None)
     app = _make_app(settings, store)
 
     async def fake_audio(*args: object, **kwargs: object) -> None:
@@ -1034,12 +972,12 @@ async def test_transcript_loop_audio_requires_openai_api_key(
     assert not (tmp_path / "audio").exists()
 
 
-async def test_transcript_loop_respects_enqueue_delay_before_first_download(
+async def test_transcript_loop_respects_enqueue_delay(
     store: QueueStore, tmp_path: Path
 ) -> None:
     """A record enqueued with a delay is not downloaded until the delay elapses."""
     # Arrange
-    settings = _make_settings(tmp_path, transcript_backend="audio")
+    settings = _make_settings(tmp_path)
     app = _make_app(settings, store)
     now = time.time()
     store.enqueue(_entry("v1"), now=now, delay_seconds=300.0)

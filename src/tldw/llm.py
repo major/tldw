@@ -7,9 +7,9 @@ talks to the OpenAI chat completions API through pydantic-ai's
 fake in tests, and lets pydantic-ai's ``FunctionModel`` exercise the real
 Agent, schema validation, and retry loop fully offline.
 
-The worker renders a transcript (see ``render_transcript_for_llm``) and passes
-the resulting string here. This module never reads subtitles and never touches
-Discord: it turns text into validated :class:`Takeaways`.
+The worker renders a transcript and passes the resulting string here. This
+module never reads subtitles and never touches Discord: it turns text into
+validated :class:`Takeaways`.
 """
 
 from __future__ import annotations
@@ -17,7 +17,8 @@ from __future__ import annotations
 import asyncio
 import bisect
 import logging
-from typing import TYPE_CHECKING, Any, Protocol
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
@@ -28,12 +29,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from tldw.config import Settings
 
-if TYPE_CHECKING:
-    # Annotation-only import so the type checker can resolve ``Cue`` without
-    # adding a runtime dependency from this module to ``transcript.py``.
-    from tldw.transcript import Cue
-
 __all__ = [
+    "Cue",
     "TakeawayBullet",
     "Takeaway",
     "Takeaways",
@@ -49,10 +46,9 @@ logger = logging.getLogger(__name__)
 # the model one chance to correct a bad shape and one to recover from a flake.
 DEFAULT_OUTPUT_RETRIES: int = 2
 
-# The transcript may arrive with [m:ss] / [h:mm:ss] anchors (vtt backend) or
-# without (audio backend, where the model does the segmenting itself). The
-# prompt asks for timestamps when anchors are present and lets the model omit
-# the field when they are not.
+# The transcript may arrive with [m:ss] / [h:mm:ss] anchors, or without (the
+# model does the segmenting itself). The prompt asks for timestamps when anchors
+# are present and lets the model omit the field when they are not.
 SYSTEM_PROMPT = (
     "You turn a YouTube transcript into structured takeaways for a busy reader.\n"
     "Return exactly 3 takeaways.\n"
@@ -74,9 +70,9 @@ class TakeawayBullet(BaseModel):
     """One bullet in a takeaway, optionally tied to a moment in the video.
 
     ``timestamp_seconds`` is optional because the audio backend delivers
-    plain text with no cue timings, while the vtt backend delivers timed
-    cues. The Discord renderer formats the bullet with a YouTube deep link
-    when the timestamp is set, and as a plain line otherwise.
+    plain text with no cue timings. The Discord renderer formats the bullet
+    with a YouTube deep link when the timestamp is set, and as a plain line
+    otherwise.
     """
 
     text: str = Field(min_length=1)
@@ -190,9 +186,17 @@ class OpenAIAnalyzer:
         return Takeaways(items=capped_items)
 
 
+@dataclass(frozen=True)
+class Cue:
+    """One timed subtitle cue: start time in seconds + clean text."""
+
+    start: float
+    text: str
+
+
 def snap_timestamps(
     takeaways: Takeaways,
-    cues: list["Cue"],
+    cues: list[Cue],
     *,
     max_drift_seconds: int = 30,
 ) -> Takeaways:

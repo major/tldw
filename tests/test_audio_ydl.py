@@ -18,18 +18,17 @@ from yt_dlp.utils import DownloadError
 
 from tldw.audio import (
     DownloadResult,
+    ProbeState,
     build_audio_ydl_opts,
     download_audio,
 )
-from tldw.transcript import ProbeState
 
 
 class FakeYoutubeDL:
     """Test double for yt_dlp.YoutubeDL. Configurable per test.
 
-    Mirrors the fake in ``tests/test_transcript.py``. ``write_files`` drops
-    files into the outtmpl directory so the download scan finds them exactly
-    where yt-dlp would have written them.
+    ``write_files`` drops files into the outtmpl directory so the download scan
+    finds them exactly where yt-dlp would have written them.
     """
 
     def __init__(
@@ -100,7 +99,7 @@ def test_build_audio_ydl_opts_default_format_chain(tmp_path: Path) -> None:
 
 
 def test_build_audio_ydl_opts_uses_2026_player_clients(tmp_path: Path) -> None:
-    """The client ladder matches the VTT fix; tv_embedded is gone in 2026."""
+    """The client ladder starts with visionos; tv_embedded is gone in 2026."""
     # Arrange
     # Default opts.
 

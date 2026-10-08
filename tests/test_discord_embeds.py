@@ -125,6 +125,39 @@ def test_build_takeaway_embed_truncates_oversized_description() -> None:
     assert description.endswith("...")
 
 
+def test_build_takeaway_embed_title_is_prefixed_with_channel_name() -> None:
+    """The embed title is ``{channel_name}: {takeaway.title}`` so the
+    creator is visible in the channel timeline alongside the headline."""
+    embed = _embed()
+
+    assert embed["title"] == f"{_CHANNEL}: Title 0"
+
+
+def test_build_takeaway_embed_truncates_oversized_title() -> None:
+    """A title over 256 chars is truncated to 256 with an ellipsis."""
+    # Takeaway.title is capped at 200 chars by the pydantic model, so the
+    # longest input we can produce is a 200-char title with a channel name
+    # long enough to push the formatted "channel: title" past 256 chars.
+    long_channel = "A" * 100
+    long_title = "T" * 200
+    takeaway = Takeaway(
+        title=long_title,
+        summary="Short",
+        bullets=[TakeawayBullet(text="One")],
+    )
+    embed = build_takeaway_embed(
+        takeaway,
+        video_id=_VIDEO_ID,
+        video_url=_VIDEO_URL,
+        channel_name=long_channel,
+        index=1,
+    )
+
+    title = embed["title"]
+    assert len(title) == 256
+    assert title.endswith("...")
+
+
 # ---------------------------------------------------------------------------
 # build_takeaway_embeds
 # ---------------------------------------------------------------------------

@@ -43,10 +43,11 @@ def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "channel_ids_file": Path("/nonexistent.json"),
         "queue_file": tmp_path / "queue.sqlite3",
         "transcript_dir": tmp_path / "transcripts",
-        # The lifespan tests predate the audio backend; pin them to the VTT
-        # path so the worker stays alive without an OpenAI key. The audio
-        # backend is covered by tests/test_worker_audio.py.
-        "transcript_backend": "vtt",
+        "audio_dir": tmp_path / "audio",
+        # The audio path always needs an OpenAI key to start the worker. The
+        # worker is still covered by tests/test_worker_audio.py; the lifespan
+        # tests only check that the task is created and cancelled.
+        "openai_api_key": "sk-test",
     }
     defaults.update(overrides)
     return Settings(**defaults)

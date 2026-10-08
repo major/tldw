@@ -32,13 +32,13 @@ from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel  #
 from tldw.config import Settings  # noqa: E402
 from tldw.llm import (  # noqa: E402
     SYSTEM_PROMPT,
+    Cue,
     OpenAIAnalyzer,
     Takeaway,
     TakeawayBullet,
     Takeaways,
     snap_timestamps,
 )
-from tldw.transcript import Cue  # noqa: E402
 
 
 def _settings(**overrides: Any) -> Settings:

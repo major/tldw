@@ -46,13 +46,12 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_HUB_SECRET` | No | unset | HMAC secret for signing deliveries. When set, every incoming notification must carry a matching `X-Hub-Signature: sha1=...` header |
 | `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Webhook URL for transcript-to-Discord delivery. When unset, the transcript worker does not run; videos are enqueued but nothing is downloaded or sent |
 | `TLDW_QUEUE_FILE` | No | `queue.sqlite3` | Path to the SQLite queue database. Persist this directory in container deployments |
-| `TLDW_TRANSCRIPT_DIR` | No | `transcripts` | Directory where downloaded `.vtt` files are kept |
+| `TLDW_TRANSCRIPT_DIR` | No | `transcripts` | Directory where the audio pipeline caches its `.txt` transcripts |
 | `TLDW_TRANSCRIPT_LINES` | No | `10` | How many transcript lines to include in each Discord message |
 | `TLDW_POLL_BASE_SECONDS` | No | `600` | First retry delay in seconds |
 | `TLDW_POLL_CAP_SECONDS` | No | `3600` | Maximum retry delay in seconds |
 | `TLDW_GIVEUP_SECONDS` | No | `172800` | Stop retrying a video after this many seconds |
 | `TLDW_YTDLP_COOKIES_FILE` | No | unset | Optional path to a Netscape-format cookies file. Improves reliability when YouTube applies bot checks |
-| `TLDW_TRANSCRIPT_LANGS` | No | `["en", "en-orig"]` | Language codes to request from yt-dlp. Use exact codes only; a regex like `en.*` triggers 429s |
 | `TLDW_OPENAI_API_KEY` | No | unset | API key for the OpenAI API. When unset, the LLM takeaway step is skipped and the plain digest is sent |
 | `TLDW_OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible endpoint |
 | `TLDW_OPENAI_MODEL` | No | `gpt-6.1-sol` | Model name to request from the endpoint |
@@ -60,7 +59,6 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_LLM_MAX_OUTPUT_TOKENS` | No | `2048` | Maximum tokens the takeaway model may generate |
 | `TLDW_LLM_MAX_INPUT_CHARS` | No | `300000` | Hard cap on transcript characters sent to the model. Longer transcripts are truncated with a warning |
 | `TLDW_TAKEAWAY_MAX_BULLETS` | No | `5` | Maximum bullets kept per takeaway |
-| `TLDW_TRANSCRIPT_BACKEND` | No | `audio` | Which fetch path to use. `audio` downloads the video's audio, compresses it with ffmpeg, and sends it to OpenAI for transcription (default; requires `TLDW_OPENAI_API_KEY`). `vtt` falls back to yt-dlp's subtitle download |
 | `TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS` | No | `300` | Delay before the first audio download. Debounces notifications and gives YouTube's pipeline time to finish producing the video |
 | `TLDW_AUDIO_DIR` | No | `audio` | Directory for raw audio downloads and compressed artifacts. May be ephemeral: the worker re-downloads on crash before the transcript is cached |
 | `TLDW_AUDIO_FORMAT` | No | `webm` | Output container for ffmpeg. Must be in OpenAI's accepted set: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, or `webm`. Use `webm` for the smallest files (Opus codec) |
@@ -82,7 +80,7 @@ When `TLDW_DISCORD_WEBHOOK_URL` is unset, the lifespan does not start the transc
 
 ### Cookies for bot-checked egress IPs :cookie:
 
-If `yt-dlp` logs `ERROR: Did not get any data blocks` over and over on a single video, or the worker output shows `Sign in to confirm you're not a bot`, YouTube has most likely flagged your cluster's egress IP. Recent yt-dlp releases (we pin `>=2026.8.19,<2027`) and the `tv_embedded` and `ios` player-client fallbacks in `build_ydl_opts` make this less frequent, but they do not eliminate it.
+If `yt-dlp` logs `ERROR: Did not get any data blocks` over and over on a single video, or the worker output shows `Sign in to confirm you're not a bot`, YouTube has most likely flagged your cluster's egress IP. Recent yt-dlp releases (we pin `>=2026.8.19,<2027`) and the audio-format chain in `build_audio_ydl_opts` make this less frequent, but they do not eliminate it.
 
 The fix is to authenticate the request with cookies from a browser session that is already logged into YouTube. Export them in Netscape format with an extension such as "Get cookies.txt LOCALLY" (Firefox) or "cookies.txt" (Chrome), then save the file somewhere the worker can read, for example `/data/youtube-cookies.txt`, and point `TLDW_YTDLP_COOKIES_FILE` at it.
 
@@ -112,13 +110,7 @@ YouTube session cookies expire, typically after a few weeks of inactivity. When 
 
 When `TLDW_OPENAI_API_KEY` is set, the worker sends the transcript through the OpenAI API and posts three Discord embeds instead of the plain digest. Each embed has a short title, a summary, and bullet points that link back to the exact moment in the video. The timestamps come from the `[m:ss]` anchors the worker adds to the rendered transcript. Unset the API key to disable takeaways and go back to the plain text digest.
 
-If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a probe, so it does not consume the request budget. :robot:
-
-### Roll-back to subtitle transcripts
-
-Set `TLDW_TRANSCRIPT_BACKEND=vtt` to switch back to the historical yt-dlp subtitle path. No redeploy is needed: change the environment variable and restart the service.
-
-The queue is shared, so the switch loses nothing. Any audio record whose transcript already landed as a cached `.txt` keeps delivering through the vtt path's `first_lines` fallback. See the `TLDW_TRANSCRIPT_BACKEND` row in the environment table above for the default and the audio-backend requirements.
+If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a download, so it does not consume the request budget. :robot:
 
 ## Run :rocket:
 
@@ -159,7 +151,7 @@ local `.env` file and compose will load it for you. :lock:
 
 Persistent storage is mandatory. `TLDW_QUEUE_FILE` (and its parent directory) and `TLDW_TRANSCRIPT_DIR` must live on storage that survives a reschedule: a named volume in compose, a PersistentVolumeClaim in Kubernetes. An `emptyDir` or a container-local path loses the queue, and because the PubSubHubbub hub does not redeliver after a 200 response, that means those videos are silently dropped.
 
-Keep the replica count at exactly one. The worker drains the queue serially, and that serial design is the rate-limit defense for YouTube: a second pod would double-probe the same videos. SQLite over a network filesystem is also unsafe. Scale CPU and memory, not replicas.
+Keep the replica count at exactly one. The worker drains the queue serially, and that serial design is the rate-limit defense for YouTube: a second pod would double-download the same videos. SQLite over a network filesystem is also unsafe. Scale CPU and memory, not replicas.
 
 Supply `TLDW_DISCORD_WEBHOOK_URL` from a Secret in production, not a plain environment variable, so the webhook URL is not exposed in the pod spec or container logs.
 
@@ -253,11 +245,13 @@ src/tldw/
   __init__.py       # re-exports tldw.cli.main
   __main__.py       # python -m tldw entry
   app.py            # FastAPI factory, GET verify, POST notify, lifespan, renewal loop
+  audio.py          # yt-dlp audio-only download + ffmpeg compress
   cli.py            # CLI entry point that hands the app to uvicorn
   config.py         # Settings (pydantic-settings) + resolve_channel_ids()
   feed.py           # parse_atom(body) -> list[VideoEntry]
   hub.py            # subscribe(), build_subscribe_form(), topic_url()
   renderer.py       # format_video_line(entry) -> str
+  transcribe.py     # OpenAI speech-to-text client
 
 tests/
   conftest.py             # shared fixtures (captured Atom payload)

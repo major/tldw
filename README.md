@@ -117,11 +117,12 @@ On startup `tldw` prints one log line per channel it subscribes to. On shutdown 
 
 ## Run with container :whale:
 
-A multi-stage `Containerfile` and `compose.yml` ship with the repo. They pin the
-same UBI 9 Python 3.14 digest used by `stocknews`, install the locked runtime
-dependencies only, and run as a non-root user. The default `channels.json` is
-baked into the image; override the channel list with `TLDW_CHANNEL_IDS` at
-runtime. :package:
+A multi-stage `Containerfile` and `compose.yml` ship with the repo. They pin
+the official `python:3.14` (full Debian-based image, not the `-slim`
+variant), install the locked runtime dependencies plus `ffmpeg` for
+`yt-dlp` postprocessing, and run as a non-root user. The default
+`channels.json` is baked into the image; override the channel list with
+`TLDW_CHANNEL_IDS` at runtime. :package:
 
 ```bash
 # Build and start the container in the background

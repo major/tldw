@@ -11,7 +11,6 @@ and ``transcript_loop`` is tested for the enqueue delay.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -28,6 +27,7 @@ from helpers import (
     make_video_entry,
     never_sleep,
     noop_sleep,
+    read_queue_row,
 )
 from tldw import worker
 from tldw.audio import CompressError, DownloadResult, ProbeState
@@ -63,20 +63,6 @@ def _fetch(queue_store: QueueStore, now: float) -> QueueRecord:
     record = queue_store.next_due(now=now)
     assert record is not None
     return record
-
-
-def _read_row(tmp_path: Path, video_id: str = _VIDEO_ID) -> sqlite3.Row:
-    """Read a videos row straight from the file, including terminal rows."""
-    conn = sqlite3.connect(str(tmp_path / "queue.sqlite3"))
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT * FROM videos WHERE video_id = ?", (video_id,)
-        ).fetchone()
-        assert row is not None
-        return row
-    finally:
-        conn.close()
 
 
 def _enqueue(queue_store: QueueStore, now: float, video_id: str = _VIDEO_ID) -> None:
@@ -375,7 +361,7 @@ async def test_process_record_audio_happy_path_calls_every_stage_in_order(
     assert analyze.calls == 1
     assert embeds_sender.calls == 1
     assert sender.calls == 0
-    row = _read_row(tmp_path)
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
     assert row["detail"] == "llm_embeds"
 
@@ -420,7 +406,7 @@ async def test_process_record_audio_skips_download_when_audio_path_cached(
     assert compress.call_count == 0
     assert transcribe.call_count == 1
     assert transcribe.last_path == cached
-    assert _read_row(tmp_path)["terminal_state"] == "DONE"
+    assert read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)["terminal_state"] == "DONE"
 
 
 async def test_process_record_audio_re_downloads_when_cached_audio_path_missing(
@@ -473,8 +459,8 @@ async def test_process_record_audio_re_downloads_when_cached_audio_path_missing(
     assert transcribe.call_count == 1
     fresh = settings.audio_dir / f"{_VIDEO_ID}.compressed.{settings.audio_format}"
     assert compress.last_dst == fresh
-    assert _read_row(tmp_path)["audio_path"] == str(fresh)
-    assert _read_row(tmp_path)["terminal_state"] == "DONE"
+    assert read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)["audio_path"] == str(fresh)
+    assert read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)["terminal_state"] == "DONE"
 
 
 async def test_process_record_audio_skips_download_and_compress_when_transcript_path_cached(
@@ -518,7 +504,7 @@ async def test_process_record_audio_skips_download_and_compress_when_transcript_
     assert compress.call_count == 0
     assert transcribe.call_count == 0
     assert analyze.calls == 1
-    assert _read_row(tmp_path)["terminal_state"] == "DONE"
+    assert read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)["terminal_state"] == "DONE"
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +699,7 @@ async def test_process_record_audio_compress_error_does_not_set_audio_path(
     )
 
     # Assert
-    assert _read_row(tmp_path)["audio_path"] is None
+    assert read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)["audio_path"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +827,7 @@ async def test_process_record_audio_empty_transcript_marks_done_with_detail_empt
     assert analyze.calls == 0
     assert sender.calls == 1
     assert embeds_sender.calls == 0
-    row = _read_row(tmp_path)
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
     assert row["detail"] == "empty_transcript"
 
@@ -879,7 +865,7 @@ async def test_process_record_audio_writes_transcript_txt_and_persists_transcrip
 
     # Assert
     assert txt.read_text(encoding="utf-8") == "hello world"
-    assert _read_row(tmp_path)["transcript_path"] == str(txt)
+    assert read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)["transcript_path"] == str(txt)
 
 
 async def test_process_record_audio_deletes_compressed_audio_after_transcription(

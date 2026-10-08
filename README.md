@@ -114,6 +114,12 @@ When `TLDW_OPENAI_API_KEY` is set, the worker sends the transcript through the O
 
 If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a probe, so it does not consume the request budget. :robot:
 
+### Roll-back to subtitle transcripts
+
+Set `TLDW_TRANSCRIPT_BACKEND=vtt` to switch back to the historical yt-dlp subtitle path. No redeploy is needed: change the environment variable and restart the service.
+
+The queue is shared, so the switch loses nothing. Any audio record whose transcript already landed as a cached `.txt` keeps delivering through the vtt path's `first_lines` fallback. See the `TLDW_TRANSCRIPT_BACKEND` row in the environment table above for the default and the audio-backend requirements.
+
 ## Run :rocket:
 
 ```bash

@@ -23,37 +23,15 @@ from pydantic import ValidationError
 from helpers import make_channels_file
 from tldw.config import Settings, resolve_channel_ids
 
-# Environment variables the Settings model reads. Cleared before every test so a
-# developer's shell or a CI job cannot leak a value into the assertions.
-_TLDW_ENV_VARS = (
-    "TLDW_CALLBACK_URL",
-    "TLDW_CHANNELS_FILE",
-    "TLDW_CHANNEL_IDS",
-    "TLDW_HUB_SECRET",
-    "TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS",
-    "TLDW_AUDIO_DIR",
-    "TLDW_AUDIO_FORMAT",
-    "TLDW_AUDIO_BITRATE",
-    "TLDW_FFMPEG_TIMEOUT_SECONDS",
-    "TLDW_TRANSCRIBE_MODEL",
-    "TLDW_TRANSCRIBE_LANGS",
-    "TLDW_TRANSCRIBE_TIMEOUT_SECONDS",
-    "TLDW_INCLUDE_SHORTS",
-)
-
 
 @pytest.fixture
-def settings_kwargs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[Callable[..., dict[str, Any]]]:
-    """Clear every TLDW_ env var and yield a factory for Settings kwargs.
+def settings_kwargs() -> Iterator[Callable[..., dict[str, Any]]]:
+    """Yield a factory that returns Settings constructor kwargs.
 
-    The factory returns the overrides it is given so tests can read as if they
-    were calling the Settings constructor directly while still starting from a
-    clean environment.
+    The env var cleanup is handled by the autouse ``clean_tldw_env``
+    fixture in conftest, so this fixture no longer touches the
+    environment.
     """
-    for name in _TLDW_ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
 
     def _kwargs(**overrides: Any) -> dict[str, Any]:
         """Return constructor kwargs for Settings merged with the overrides."""

@@ -135,10 +135,14 @@ def _audio_file(tmp_path: Path) -> Path:
 
 
 def _kwargs(audio_path: Path, **overrides: Any) -> dict[str, Any]:
-    """Build the default transcribe kwargs with optional overrides."""
+    """Build the default transcribe kwargs with optional overrides.
+
+    The language is hardcoded inside ``transcribe()`` - there is no
+    ``langs`` kwarg to pass. Callers can override the optional
+    ``prompt`` and ``keywords`` context fields.
+    """
     values: dict[str, Any] = {
         "model": "gpt-transcribe",
-        "langs": ["en"],
         "api_key": "sk-test",
         "base_url": "https://api.openai.com/v1",
         "timeout_s": transcribe.DEFAULT_TIMEOUT_SECONDS,
@@ -169,10 +173,16 @@ def test_transcribe_uses_gpt_transcribe_model(
     assert fake.create_kwargs["model"] == "gpt-transcribe"
 
 
-def test_transcribe_uses_languages_plural_array(
+def test_transcribe_always_pins_us_english(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The plural ``languages`` kwarg is sent; singular ``language`` is not."""
+    """The ``languages`` request field is hardcoded to ``["en"]``.
+
+    The plural ``languages`` field is the right key for gpt-transcribe
+    per OpenAI's docs (the singular ``language=`` is for older models).
+    tldw's contract is US English always - no caller input can change
+    the list.
+    """
     # Arrange
     audio_path = _audio_file(tmp_path)
     fake = _install_fake(monkeypatch, result=_FakeResult("ok"))
@@ -326,17 +336,154 @@ def test_transcribe_translates_api_status_error_to_transcribe_error(
     assert exc_info.value.status_code == 429
 
 
-@pytest.mark.parametrize("langs", [["en"], ["en", "es"], []])
-def test_transcribe_passes_languages_list_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, langs: list[str]
+def test_transcribe_forwards_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The caller's language list is forwarded with no normalization."""
+    """A non-empty ``prompt`` reaches the SDK as the ``prompt`` kwarg."""
+    # Arrange
+    audio_path = _audio_file(tmp_path)
+    fake = _install_fake(monkeypatch, result=_FakeResult("ok"))
+    expected_prompt = (
+        "YouTube video titled 'Why Do Police Ask THIS During a Traffic Stop?' "
+        "from channel 'Hampton Law'. US English transcript."
+    )
+
+    # Act
+    asyncio.run(
+        transcribe.transcribe(
+            audio_path,
+            **_kwargs(audio_path, prompt=expected_prompt),
+        )
+    )
+
+    # Assert
+    assert fake.create_kwargs["prompt"] == expected_prompt
+
+
+def test_transcribe_omits_empty_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty/None ``prompt`` is omitted from the SDK call.
+
+    Per OpenAI's docs: "use these inputs only for context relevant to the
+    audio; don't restate the transcription task." So we forward only
+    meaningful context.
+    """
     # Arrange
     audio_path = _audio_file(tmp_path)
     fake = _install_fake(monkeypatch, result=_FakeResult("ok"))
 
     # Act
-    asyncio.run(transcribe.transcribe(audio_path, **_kwargs(audio_path, langs=langs)))
+    for empty in ("", None):
+        asyncio.run(
+            transcribe.transcribe(
+                audio_path,
+                **_kwargs(audio_path, prompt=empty),
+            )
+        )
 
     # Assert
-    assert fake.create_kwargs["languages"] == langs
+    assert "prompt" not in fake.create_kwargs
+
+
+def test_transcribe_forwards_keywords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-empty ``keywords`` list reaches the SDK as the ``keywords`` kwarg."""
+    # Arrange
+    audio_path = _audio_file(tmp_path)
+    fake = _install_fake(monkeypatch, result=_FakeResult("ok"))
+    keywords = ["officer", "medication", "traffic stop", "DUI"]
+
+    # Act
+    asyncio.run(
+        transcribe.transcribe(
+            audio_path,
+            **_kwargs(audio_path, keywords=keywords),
+        )
+    )
+
+    # Assert
+    assert fake.create_kwargs["keywords"] == keywords
+
+
+def test_transcribe_omits_empty_keywords(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty/None ``keywords`` list is omitted from the SDK call."""
+    # Arrange
+    audio_path = _audio_file(tmp_path)
+    fake = _install_fake(monkeypatch, result=_FakeResult("ok"))
+
+    # Act
+    for empty in ([], None):
+        asyncio.run(
+            transcribe.transcribe(
+                audio_path,
+                **_kwargs(audio_path, keywords=empty),
+            )
+        )
+
+    # Assert
+    assert "keywords" not in fake.create_kwargs
+
+
+def test_build_prompt_returns_none_with_no_metadata() -> None:
+    """``build_prompt()`` returns ``None`` so the API call omits the field."""
+    # Act
+    result = transcribe.build_prompt()
+
+    # Assert
+    assert result is None
+
+
+def test_build_prompt_explicitly_says_us_english() -> None:
+    """The prompt anchors the ASR to US English.
+
+    This is the literal guarantee that fulfills the "always US English,
+    no matter what" contract.
+    """
+    # Act
+    result = transcribe.build_prompt(
+        title="Why Do Police Ask THIS During a Traffic Stop?",
+        channel_name="Hampton Law",
+    )
+
+    # Assert
+    assert result is not None
+    assert "US English" in result
+
+
+def test_build_prompt_quotes_title_and_channel() -> None:
+    """``title`` and ``channel_name`` are quoted so the model sees them as
+    labels, not as instructions."""
+    # Act
+    result = transcribe.build_prompt(
+        title="Coast to Coast AM",
+        channel_name="Hampton Law",
+    )
+
+    # Assert
+    assert result is not None
+    assert repr("Coast to Coast AM") in result
+    assert repr("Hampton Law") in result
+
+
+def test_build_prompt_with_only_title() -> None:
+    """A title alone is enough to anchor the ASR; the channel is optional."""
+    # Act
+    result = transcribe.build_prompt(title="Just a title")
+
+    # Assert
+    assert result is not None
+    assert "US English" in result
+
+
+def test_build_prompt_with_only_channel() -> None:
+    """A channel alone is enough to anchor the ASR; the title is optional."""
+    # Act
+    result = transcribe.build_prompt(channel_name="Hampton Law")
+
+    # Assert
+    assert result is not None
+    assert "US English" in result

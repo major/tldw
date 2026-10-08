@@ -163,7 +163,15 @@ class OpenAIAnalyzer:
                 # retries (there is no ``output_retries`` kwarg in this version).
                 retries=DEFAULT_OUTPUT_RETRIES,
                 model_settings=OpenAIChatModelSettings(
-                    max_tokens=self._settings.llm_max_output_tokens
+                    max_tokens=self._settings.llm_max_output_tokens,
+                    # gpt-6.1-sol and similar thinking-model variants default
+                    # to reasoning_effort="medium" on /v1/chat/completions and
+                    # the API rejects function tools when reasoning is active.
+                    # Force it off here so the structured Takeaways parser
+                    # (which is itself a function tool) works. Pydantic-AI
+                    # accepts "none" for OpenAIChatModelSettings.openai_reasoning_effort
+                    # and forwards it to the API.
+                    openai_reasoning_effort="none",
                 ),
             )
             result = await asyncio.wait_for(

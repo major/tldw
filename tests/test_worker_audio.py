@@ -457,7 +457,7 @@ async def test_process_record_audio_skips_download_when_audio_path_cached(
     # Arrange
     settings = _make_settings(tmp_path)
     now = 1000.0
-    cached = tmp_path / "audio" / f"{_VIDEO_ID}.webm"
+    cached = tmp_path / "audio" / f"{_VIDEO_ID}.compressed.webm"
     cached.parent.mkdir(parents=True, exist_ok=True)
     cached.write_bytes(b"cached")
     _enqueue_cached(store, tmp_path, now, audio_path=cached)
@@ -744,7 +744,7 @@ async def test_process_record_audio_429_api_error_reschedules_with_audio_path_pr
         [DownloadResult(ProbeState.READY, str(_ready_raw(tmp_path)), None)]
     )
     transcribe = FakeTranscribe(raises=TranscribeError("slow down", status_code=429))
-    compressed = settings.audio_dir / f"{_VIDEO_ID}.{settings.audio_format}"
+    compressed = settings.audio_dir / f"{_VIDEO_ID}.compressed.{settings.audio_format}"
 
     # Act
     await _run_audio(
@@ -855,7 +855,7 @@ async def test_process_record_audio_deletes_compressed_audio_after_transcription
         [DownloadResult(ProbeState.READY, str(_ready_raw(tmp_path)), None)]
     )
     compress = FakeCompress(creates=True)
-    compressed = settings.audio_dir / f"{_VIDEO_ID}.{settings.audio_format}"
+    compressed = settings.audio_dir / f"{_VIDEO_ID}.compressed.{settings.audio_format}"
 
     # Act
     await _run_audio(
@@ -941,7 +941,7 @@ async def test_process_record_audio_uses_audio_settings_for_dest_dir_and_format(
 
     # Assert
     assert download.last_dest_dir == custom_dir
-    assert compress.last_dst == custom_dir / f"{_VIDEO_ID}.mp3"
+    assert compress.last_dst == custom_dir / f"{_VIDEO_ID}.compressed.mp3"
     assert compress.last_bitrate == "24k"
 
 

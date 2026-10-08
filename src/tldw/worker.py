@@ -501,7 +501,13 @@ async def _compress_stage(
     rescheduled. On success the raw file is deleted (best effort) so only the
     compressed artifact stays on disk.
     """
-    dst = settings.audio_dir / f"{record.video_id}.{settings.audio_format}"
+    # The raw download lands at audio_dir/{video_id}.{yt-dlp ext} (see
+    # build_ydl_opts outtmpl). If that extension happens to equal
+    # settings.audio_format - both default to "webm" - the compressed
+    # destination would be the same path as the input and ffmpeg exits 234
+    # with "Output ... same as Input". Append a ".compressed" segment so the
+    # two paths are always distinct, regardless of the configured format.
+    dst = settings.audio_dir / f"{record.video_id}.compressed.{settings.audio_format}"
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
         await asyncio.to_thread(

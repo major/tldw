@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from tldw.queue import QueueStore, open_store
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -48,3 +51,19 @@ def real_atom_payload() -> bytes:
 def multi_entry_payload() -> bytes:
     """Return a small Atom feed containing two distinct video entries."""
     return _MULTI_ENTRY_XML.encode("utf-8")
+
+
+@pytest.fixture
+def queue_store(tmp_path: Path) -> Iterator[QueueStore]:
+    """Open a real QueueStore backed by a temporary database.
+
+    Used by the worker and worker_takeaways tests. Replaces two byte-for-byte
+    identical ``store`` fixtures that previously lived in those files. Tests
+    that need a non-default path or a closed-and-reopened store should still
+    call ``open_store(...)`` directly with ``tmp_path / "..."``.
+    """
+    store = open_store(tmp_path / "queue.sqlite3")
+    try:
+        yield store
+    finally:
+        store.close()

@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sqlite3
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -22,51 +22,14 @@ import pydantic_ai.exceptions
 import pytest
 from pydantic import ValidationError
 
+from helpers import make_settings, make_video_entry
 from tldw.audio import DownloadResult
 from tldw.config import Settings
-from tldw.feed import VideoEntry
 from tldw.llm import OpenAIAnalyzer, Takeaways
-from tldw.queue import QueueRecord, QueueStore, open_store
+from tldw.queue import QueueRecord, QueueStore
 from tldw.worker import _process_record_audio
 
 _VIDEO_ID = "dQw4w9WgXcQ"
-
-
-def _entry(video_id: str = _VIDEO_ID, **overrides: object) -> VideoEntry:
-    """Build a VideoEntry with sensible defaults for worker tests."""
-    defaults: dict[str, object] = {
-        "video_id": video_id,
-        "channel_id": "UC_x5XG1OV2P6uZZ5FSM9Ttw",
-        "title": f"Test {video_id}",
-        "url": f"https://www.youtube.com/watch?v={video_id}",
-        "channel_name": "Test Channel",
-        "published": None,
-        "updated": None,
-    }
-    defaults.update(overrides)
-    return VideoEntry(**defaults)  # type: ignore[arg-type]
-
-
-def _make_settings(tmp_path: Path, **overrides: Any) -> Settings:
-    """Build Settings with the transcript pipeline and an API key configured."""
-    defaults: dict[str, Any] = {
-        "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": Path("/nonexistent.json"),
-        "discord_webhook_url": "https://discord.com/api/webhooks/x/y",
-        "transcript_dir": tmp_path / "transcripts",
-        "queue_file": tmp_path / "queue.sqlite3",
-        "openai_api_key": "test-key",
-    }
-    defaults.update(overrides)
-    return Settings(**defaults)
-
-
-@pytest.fixture
-def store(tmp_path: Path) -> Iterator[QueueStore]:
-    """Open a real QueueStore backed by a temporary database."""
-    queue_store = open_store(tmp_path / "queue.sqlite3")
-    yield queue_store
-    queue_store.close()
 
 
 def _write_txt(tmp_path: Path, video_id: str) -> Path:
@@ -84,18 +47,18 @@ def _write_empty_txt(tmp_path: Path, video_id: str) -> Path:
 
 
 def _enqueue_with_path(
-    store: QueueStore, path: Path, video_id: str, now: float
+    queue_store: QueueStore, path: Path, video_id: str, now: float
 ) -> None:
     """Enqueue a record and pre-set its cached transcript path."""
-    store.enqueue(_entry(video_id), now=now)
-    store.mark_attempt(
+    queue_store.enqueue(make_video_entry(video_id), now=now)
+    queue_store.mark_attempt(
         video_id, now=now, next_attempt_at=now, transcript_path=str(path)
     )
 
 
-def _fetch(store: QueueStore, now: float) -> QueueRecord:
+def _fetch(queue_store: QueueStore, now: float) -> QueueRecord:
     """Fetch the single pending record, asserting it exists."""
-    record = store.next_due(now=now)
+    record = queue_store.next_due(now=now)
     assert record is not None
     return record
 
@@ -202,7 +165,7 @@ async def _noop_sleep(_delay: float) -> None:
 
 
 async def _run(
-    store: QueueStore,
+    queue_store: QueueStore,
     tmp_path: Path,
     *,
     settings: Settings,
@@ -212,11 +175,11 @@ async def _run(
     embeds_sender: CountingSendEmbeds,
 ) -> None:
     """Drive _process_record_audio for one cached-transcript record."""
-    record = _fetch(store, now)
+    record = _fetch(queue_store, now)
     await _process_record_audio(
         record,
         settings,
-        store,
+        queue_store,
         httpx2.AsyncClient(),
         download_audio=_download_should_not_run,
         compress_audio=_compress_should_not_run,
@@ -235,20 +198,24 @@ async def _run(
 
 
 async def test_llm_success_sends_embeds_and_marks_done(
-    store: QueueStore, tmp_path: Path
+    queue_store: QueueStore, tmp_path: Path
 ) -> None:
     """A successful analysis posts three embeds and marks DONE with llm_embeds."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
-    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(result=_takeaways())
 
     # Act
     await _run(
-        store,
+        queue_store,
         tmp_path,
         settings=settings,
         now=now,
@@ -273,20 +240,24 @@ async def test_llm_success_sends_embeds_and_marks_done(
 
 
 async def test_no_api_key_skips_analysis_and_sends_plain(
-    store: QueueStore, tmp_path: Path
+    queue_store: QueueStore, tmp_path: Path
 ) -> None:
     """Without an API key the analyzer never runs and the plain digest is sent."""
     # Arrange
-    settings = _make_settings(tmp_path, openai_api_key=None)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key=None,
+    )
     now = 1000.0
-    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(raises=AssertionError("analyze should not have run"))
 
     # Act
     await _run(
-        store,
+        queue_store,
         tmp_path,
         settings=settings,
         now=now,
@@ -305,21 +276,25 @@ async def test_no_api_key_skips_analysis_and_sends_plain(
 
 
 async def test_empty_transcript_skips_analysis_and_sends_plain(
-    store: QueueStore, tmp_path: Path
+    queue_store: QueueStore, tmp_path: Path
 ) -> None:
     """An empty transcript skips the LLM and sends the plain digest."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
     path = _write_empty_txt(tmp_path, _VIDEO_ID)
-    _enqueue_with_path(store, path, _VIDEO_ID, now)
+    _enqueue_with_path(queue_store, path, _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(raises=AssertionError("analyze should not have run"))
 
     # Act
     await _run(
-        store,
+        queue_store,
         tmp_path,
         settings=settings,
         now=now,
@@ -375,20 +350,24 @@ def _unexpected_model_behavior() -> pydantic_ai.exceptions.UnexpectedModelBehavi
     ids=["timeout", "validation", "api_error", "unexpected_model"],
 )
 async def test_llm_failure_falls_back_to_plain_digest(
-    store: QueueStore, tmp_path: Path, exc: BaseException
+    queue_store: QueueStore, tmp_path: Path, exc: BaseException
 ) -> None:
     """A timeout, validation, API, or unexpected-model error falls back without bumping attempts."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
-    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(raises=exc)
 
     # Act
     await _run(
-        store,
+        queue_store,
         tmp_path,
         settings=settings,
         now=now,
@@ -455,20 +434,24 @@ def _takeaways_without_timestamps() -> Takeaways:
 
 
 async def test_takeaways_without_timestamps_render_plain(
-    store: QueueStore, tmp_path: Path
+    queue_store: QueueStore, tmp_path: Path
 ) -> None:
     """Audio-backend takeaways render plain bullet lines, not deep links."""
     # Arrange
-    settings = _make_settings(tmp_path)
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="test-key",
+    )
     now = 1000.0
-    _enqueue_with_path(store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
+    _enqueue_with_path(queue_store, _write_txt(tmp_path, _VIDEO_ID), _VIDEO_ID, now)
     sender = CountingSend()
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(result=_takeaways_without_timestamps())
 
     # Act
     await _run(
-        store,
+        queue_store,
         tmp_path,
         settings=settings,
         now=now,

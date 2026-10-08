@@ -8,37 +8,6 @@ import pytest
 
 from tldw.feed import is_short_url, parse_atom
 
-_ATOM = "http://www.w3.org/2005/Atom"
-_YT = "http://www.youtube.com/xml/schemas/2015"
-_MEDIA = "http://search.yahoo.com/mrss/"
-
-EMPTY_FEED = b"<feed xmlns='http://www.w3.org/2005/Atom'></feed>"
-
-MALFORMED_XML = b"<feed><entry>"
-
-MISSING_LINK_XML = (
-    '<?xml version="1.0" encoding="UTF-8"?>'
-    f'<feed xmlns="{_ATOM}" xmlns:yt="{_YT}">'
-    "<entry>"
-    "<yt:videoId>v_NoLinkAAAAAA</yt:videoId>"
-    "<title>No Link Here</title>"
-    "<author><name>Fixture Channel</name></author>"
-    "</entry>"
-    "</feed>"
-).encode("utf-8")
-
-MEDIA_TITLE_XML = (
-    '<?xml version="1.0" encoding="UTF-8"?>'
-    f'<feed xmlns="{_ATOM}" xmlns:media="{_MEDIA}">'
-    "<entry>"
-    "<title></title>"
-    "<media:title>From Media Title</media:title>"
-    '<link rel="alternate" href="https://www.youtube.com/watch?v=v_MediaAAAAAA"/>'
-    "<author><name>Fixture Channel</name></author>"
-    "</entry>"
-    "</feed>"
-).encode("utf-8")
-
 
 @pytest.mark.parametrize(
     ("fixture_name", "expected_count"),
@@ -95,10 +64,10 @@ def test_multi_entry_payload_titles(multi_entry_payload: bytes) -> None:
     assert [entry.title for entry in entries] == expected_titles
 
 
-def test_empty_feed_returns_empty_list() -> None:
+def test_empty_feed_returns_empty_list(empty_atom_payload: bytes) -> None:
     """A feed with no entries parses to an empty list."""
     # Arrange
-    payload = EMPTY_FEED
+    payload = empty_atom_payload
 
     # Act
     entries = parse_atom(payload)
@@ -107,20 +76,24 @@ def test_empty_feed_returns_empty_list() -> None:
     assert entries == []
 
 
-def test_entry_missing_link_raises_value_error() -> None:
+def test_entry_missing_link_raises_value_error(
+    missing_link_atom_payload: bytes,
+) -> None:
     """An entry without any <link> element is rejected with ValueError."""
     # Arrange
-    payload = MISSING_LINK_XML
+    payload = missing_link_atom_payload
 
     # Act / Assert
     with pytest.raises(ValueError):
         parse_atom(payload)
 
 
-def test_entry_falls_back_to_media_title() -> None:
+def test_entry_falls_back_to_media_title(
+    media_title_atom_payload: bytes,
+) -> None:
     """An empty Atom <title> falls back to the media:title text."""
     # Arrange
-    payload = MEDIA_TITLE_XML
+    payload = media_title_atom_payload
 
     # Act
     entries = parse_atom(payload)
@@ -129,10 +102,10 @@ def test_entry_falls_back_to_media_title() -> None:
     assert entries[0].title == "From Media Title"
 
 
-def test_malformed_xml_raises_parse_error() -> None:
+def test_malformed_xml_raises_parse_error(malformed_atom_payload: bytes) -> None:
     """Malformed XML surfaces the parser's own ParseError."""
     # Arrange
-    payload = MALFORMED_XML
+    payload = malformed_atom_payload
 
     # Act / Assert
     with pytest.raises(ET.ParseError):

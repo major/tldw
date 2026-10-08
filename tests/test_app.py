@@ -248,13 +248,6 @@ def client_without_secret(settings_without_secret: Settings) -> Iterator[TestCli
         yield c
 
 
-_EMPTY_ATOM = (
-    b'<?xml version="1.0" encoding="utf-8"?>'
-    b'<feed xmlns="http://www.w3.org/2005/Atom"/>'
-)
-_MALFORMED_ATOM = b"<feed><entry>"  # unclosed tag
-
-
 def test_post_signed_multi_entry_prints_each_video(
     client_with_secret: TestClient,
     multi_entry_payload: bytes,
@@ -364,16 +357,17 @@ def test_post_unsigned_without_secret_prints_lines(
 
 def test_post_malformed_xml_returns_200_and_logs(
     client_with_secret: TestClient,
+    malformed_atom_payload: bytes,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Malformed XML is logged and answered 200 so the hub does not retry forever."""
     # Arrange
-    headers = {"X-Hub-Signature": _sign(_MALFORMED_ATOM)}
+    headers = {"X-Hub-Signature": _sign(malformed_atom_payload)}
 
     # Act
     with caplog.at_level(logging.WARNING):
         response = client_with_secret.post(
-            "/pubsub/callback", content=_MALFORMED_ATOM, headers=headers
+            "/pubsub/callback", content=malformed_atom_payload, headers=headers
         )
 
     # Assert
@@ -386,15 +380,16 @@ def test_post_malformed_xml_returns_200_and_logs(
 
 def test_post_empty_feed_returns_200_and_prints_nothing(
     client_with_secret: TestClient,
+    empty_atom_envelope: bytes,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A signed feed with no entries is accepted and prints nothing."""
     # Arrange
-    headers = {"X-Hub-Signature": _sign(_EMPTY_ATOM)}
+    headers = {"X-Hub-Signature": _sign(empty_atom_envelope)}
 
     # Act
     response = client_with_secret.post(
-        "/pubsub/callback", content=_EMPTY_ATOM, headers=headers
+        "/pubsub/callback", content=empty_atom_envelope, headers=headers
     )
 
     # Assert

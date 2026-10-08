@@ -54,6 +54,60 @@ def multi_entry_payload() -> bytes:
 
 
 @pytest.fixture
+def empty_atom_payload() -> bytes:
+    """Return a minimal valid Atom feed with no entries (test_feed shape)."""
+    return b"<feed xmlns='http://www.w3.org/2005/Atom'></feed>"
+
+
+@pytest.fixture
+def empty_atom_envelope() -> bytes:
+    """Return a minimal Atom envelope in the form the FastAPI app posts (test_app shape)."""
+    return (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<feed xmlns="http://www.w3.org/2005/Atom"/>'
+    )
+
+
+@pytest.fixture
+def malformed_atom_payload() -> bytes:
+    """Return a malformed Atom document (unclosed tag) shared by both test files."""
+    return b"<feed><entry>"
+
+
+@pytest.fixture
+def missing_link_atom_payload() -> bytes:
+    """Return an Atom entry with no <link> element to exercise the link-missing path."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
+        "<entry>"
+        "<yt:videoId>v_NoLinkAAAAAA</yt:videoId>"
+        "<title>No Link Here</title>"
+        "<author><name>Fixture Channel</name></author>"
+        "</entry>"
+        "</feed>"
+    ).encode("utf-8")
+
+
+@pytest.fixture
+def media_title_atom_payload() -> bytes:
+    """Return an Atom entry whose title comes from the media: namespace."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:media="http://search.yahoo.com/mrss/">'
+        "<entry>"
+        "<title></title>"
+        "<media:title>From Media Title</media:title>"
+        '<link rel="alternate" href="https://www.youtube.com/watch?v=v_MediaAAAAAA"/>'
+        "<author><name>Fixture Channel</name></author>"
+        "</entry>"
+        "</feed>"
+    ).encode("utf-8")
+
+
+@pytest.fixture
 def queue_store(tmp_path: Path) -> Iterator[QueueStore]:
     """Open a real QueueStore backed by a temporary database.
 

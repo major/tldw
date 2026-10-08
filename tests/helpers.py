@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -248,3 +249,33 @@ def make_channels_file(
     path = tmp_path / name
     path.write_text(json.dumps({"channel_ids": ids}), encoding="utf-8")
     return path
+
+
+def make_log_record(
+    msg: str,
+    *,
+    name: str = "tldw.cli",
+    level: int = logging.INFO,
+    args: tuple[object, ...] | None = None,
+    pathname: str = __file__,
+    lineno: int = 1,
+    fixed_epoch: float | None = 1735689600,
+) -> logging.LogRecord:
+    """Build a ``LogRecord`` with optional deterministic creation time.
+
+    ``fixed_epoch`` defaults to the 2025-01-01T00:00:00+00:00 epoch the
+    CLI tests use, so the rendered asctime is stable. Pass ``None`` to
+    keep the wall-clock default (used by the tldw access-log tests).
+    """
+    record = logging.LogRecord(
+        name=name,
+        level=level,
+        pathname=pathname,
+        lineno=lineno,
+        msg=msg,
+        args=args,
+        exc_info=None,
+    )
+    if fixed_epoch is not None:
+        record.created = fixed_epoch
+    return record

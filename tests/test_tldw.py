@@ -10,6 +10,7 @@ import fastapi
 import pytest
 
 import tldw.cli as tldw_cli
+from helpers import make_log_record
 
 
 @pytest.fixture
@@ -73,23 +74,20 @@ def test_main_installs_probe_filter_on_uvicorn_access(
     ]
     assert len(matching) == 1
     probe_filter = matching[0]
-    probe_record = _make_access_record('10.0.0.1:1234 - "GET /version HTTP/1.1" 200')
-    other_record = _make_access_record('10.0.0.1:1234 - "GET /queue HTTP/1.1" 200')
+    probe_record = make_log_record(
+        '10.0.0.1:1234 - "GET /version HTTP/1.1" 200',
+        name="uvicorn.access",
+        lineno=0,
+        fixed_epoch=None,
+    )
+    other_record = make_log_record(
+        '10.0.0.1:1234 - "GET /queue HTTP/1.1" 200',
+        name="uvicorn.access",
+        lineno=0,
+        fixed_epoch=None,
+    )
     assert probe_filter.filter(probe_record) is False
     assert probe_filter.filter(other_record) is True
-
-
-def _make_access_record(message: str) -> logging.LogRecord:
-    """Build a LogRecord that mimics what uvicorn hands to its access logger."""
-    return logging.LogRecord(
-        name="uvicorn.access",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=0,
-        msg=message,
-        args=(),
-        exc_info=None,
-    )
 
 
 def test_main_loads_callback_url_from_environment(

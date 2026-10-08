@@ -282,16 +282,22 @@ async def _process_record(
                 rate_limit_streak=0,
             )
             record_path = result.transcript_path
-            try:
-                _size = Path(record_path).stat().st_size
-            except OSError:
-                _size = -1
-            logger.info(
-                "transcript ready: video=%s path=%s size_bytes=%d",
-                record.video_id,
-                record_path,
-                _size,
-            )
+            if record_path is not None:
+                try:
+                    _size = Path(record_path).stat().st_size
+                except OSError:
+                    _size = -1
+                logger.info(
+                    "transcript ready: video=%s path=%s size_bytes=%d",
+                    record.video_id,
+                    record_path,
+                    _size,
+                )
+            else:
+                logger.info(
+                    "transcript ready: video=%s path=None",
+                    record.video_id,
+                )
         elif result.state is ProbeState.RATE_LIMITED:
             # Count consecutive 429s on the row. Any other outcome below resets
             # this to 0, so the give-up budget only trips on a real streak.

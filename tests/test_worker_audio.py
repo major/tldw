@@ -488,6 +488,55 @@ async def test_process_record_audio_skips_download_when_audio_path_cached(
     assert _read_row(tmp_path)["terminal_state"] == "DONE"
 
 
+async def test_process_record_audio_re_downloads_when_cached_audio_path_missing(
+    store: QueueStore, tmp_path: Path
+) -> None:
+    """A stale audio_path that no longer points at a file must trigger re-download.
+
+    The compressed audio is best-effort-deleted after a successful transcribe,
+    but the row keeps the old ``audio_path`` until the next reschedule
+    successfully writes a fresh path. If the LLM step failed downstream on
+    a previous attempt, the file is gone but the row still references it.
+    Without the existence check, the worker would skip download+compress and
+    feed transcribe a vanished path on every retry.
+    """
+    # Arrange: enqueue a row whose audio_path points at a file we never create.
+    settings = _make_settings(tmp_path)
+    now = 1000.0
+    stale = tmp_path / "audio" / f"{_VIDEO_ID}.compressed.webm"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    # NB: deliberately do NOT write the file.
+    _enqueue_cached(store, tmp_path, now, audio_path=stale)
+    download = FakeDownload(
+        [DownloadResult(ProbeState.READY, str(_ready_raw(tmp_path)), None)]
+    )
+    compress = FakeCompress(creates=True)
+    transcribe = FakeTranscribe(transcripts=["hello world"])
+
+    # Act
+    await _run_audio(
+        store,
+        settings,
+        now=now,
+        download=download,
+        compress=compress,
+        transcribe=transcribe,
+        analyze=FakeAnalyze(result=_takeaways()),
+        sender=CountingSend(),
+        embeds_sender=CountingSendEmbeds(),
+    )
+
+    # Assert: download and compress ran because the cached file was gone, the
+    # new compressed path is persisted on the row, and the run finished DONE.
+    assert download.call_count == 1
+    assert compress.call_count == 1
+    assert transcribe.call_count == 1
+    fresh = settings.audio_dir / f"{_VIDEO_ID}.compressed.{settings.audio_format}"
+    assert compress.last_dst == fresh
+    assert _read_row(tmp_path)["audio_path"] == str(fresh)
+    assert _read_row(tmp_path)["terminal_state"] == "DONE"
+
+
 async def test_process_record_audio_skips_download_and_compress_when_transcript_path_cached(
     store: QueueStore, tmp_path: Path
 ) -> None:

@@ -22,7 +22,7 @@ import pydantic_ai.exceptions
 import pytest
 from pydantic import ValidationError
 
-from helpers import make_settings, make_video_entry
+from helpers import make_settings, make_video_entry, noop_sleep
 from tldw.audio import DownloadResult
 from tldw.config import Settings
 from tldw.llm import OpenAIAnalyzer, Takeaways
@@ -159,11 +159,6 @@ class FakeAnalyze:
         return self.result
 
 
-async def _noop_sleep(_delay: float) -> None:
-    """Sleep stub for per-record tests that never need to wait."""
-    return None
-
-
 async def _run(
     queue_store: QueueStore,
     tmp_path: Path,
@@ -187,7 +182,7 @@ async def _run(
         analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        sleep=_noop_sleep,
+        sleep=noop_sleep,
         now=now,
     )
 

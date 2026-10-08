@@ -25,7 +25,13 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from helpers import make_capturing_transport, make_settings, make_video_entry
+from helpers import (
+    counting_sleep,
+    make_capturing_transport,
+    make_settings,
+    make_video_entry,
+    never_sleep,
+)
 from tldw import _version
 from tldw.app import _renewal_loop, create_app, renewal_delay
 from tldw.config import Settings
@@ -490,11 +496,6 @@ def captured_hub_requests() -> list[httpx2.Request]:
     return []
 
 
-async def _never_sleep(_: float) -> None:
-    """Sleep stub that raises if invoked; tests expect the loop to skip the sleep entirely."""
-    raise AssertionError("renewal loop should have skipped sleeping")
-
-
 async def _drive_renewal_loop(
     settings: Settings,
     *,
@@ -509,21 +510,6 @@ async def _drive_renewal_loop(
     )
     async with httpx2.AsyncClient(transport=transport) as client:
         await _renewal_loop(app, client, sleep=sleep)
-
-
-def _make_counting_sleep(
-    delays: list[float], *, cancel_after: int = 2
-) -> Callable[[float], Awaitable[None]]:
-    """Return a sleep stub that records delays and cancels the loop after N calls."""
-    calls = {"count": 0}
-
-    async def sleep(delay: float) -> None:
-        delays.append(delay)
-        calls["count"] += 1
-        if calls["count"] >= cancel_after:
-            raise asyncio.CancelledError
-
-    return sleep
 
 
 def test_lifespan_subscribes_to_every_resolved_channel(
@@ -725,12 +711,12 @@ async def test_renewal_loop_skips_when_callback_url_missing(
 ) -> None:
     """A missing callback URL makes the renewal loop return without sleeping or posting."""
     # Arrange
-    # _never_sleep raises if the loop sleeps when it should have returned early.
+    # never_sleep raises if the loop sleeps when it should have returned early.
 
     # Act
     await _drive_renewal_loop(
         settings_without_callback,
-        sleep=_never_sleep,
+        sleep=never_sleep,
         captured=captured_hub_requests,
     )
 
@@ -744,12 +730,12 @@ async def test_renewal_loop_skips_when_no_channels_resolve(
 ) -> None:
     """An empty channel list makes the renewal loop return without sleeping or posting."""
     # Arrange
-    # _never_sleep raises if the loop sleeps when it should have returned early.
+    # never_sleep raises if the loop sleeps when it should have returned early.
 
     # Act
     await _drive_renewal_loop(
         settings_empty_channels,
-        sleep=_never_sleep,
+        sleep=never_sleep,
         captured=captured_hub_requests,
     )
 
@@ -764,7 +750,7 @@ async def test_renewal_loop_sleeps_then_resubscribes(
     """One renewal cycle sleeps once, then re-subscribes every resolved channel."""
     # Arrange
     delays: list[float] = []
-    sleep = _make_counting_sleep(delays, cancel_after=2)
+    sleep = counting_sleep(delays, cancel_after=2)
 
     # Act
     with pytest.raises(asyncio.CancelledError):
@@ -797,7 +783,7 @@ async def test_renewal_loop_logs_warning_on_non_2xx_renewal(
     # response: both responses are for the two renewal POSTs.
     responses = [httpx2.Response(400, text="bad"), httpx2.Response(400, text="bad")]
     delays: list[float] = []
-    sleep = _make_counting_sleep(delays, cancel_after=2)
+    sleep = counting_sleep(delays, cancel_after=2)
 
     # Act
     with caplog.at_level(logging.WARNING):

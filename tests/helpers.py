@@ -7,6 +7,8 @@ boundary between auto-injected fixtures and explicit helpers stays clear.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -93,3 +95,51 @@ def make_capturing_transport(
         return httpx2.Response(default_status)
 
     return httpx2.MockTransport(handler)
+
+
+def recording_sleep() -> tuple[
+    list[float], Callable[[float], Awaitable[None]]
+]:
+    """Return ``(delays, sleep)`` where ``sleep`` records instead of waiting.
+
+    The returned ``delays`` list is mutated in place as ``sleep`` is called,
+    so tests can assert the recorded delay sequence after the await.
+    """
+    delays: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+
+    return delays, sleep
+
+
+async def noop_sleep(_delay: float) -> None:
+    """Sleep stub that returns immediately. Used in worker pipeline tests."""
+
+
+async def never_sleep(_delay: float) -> None:
+    """Sleep stub that raises if called.
+
+    Tests that inject this prove the loop returned before reaching any
+    sleep, so an unhandled call here indicates a regression.
+    """
+    raise AssertionError("sleep should not be called")
+
+
+def counting_sleep(
+    delays: list[float], cancel_after: int
+) -> Callable[[float], Awaitable[None]]:
+    """Sleep stub that records delays and raises ``CancelledError`` after N.
+
+    Used to drive the worker loop's cancellation path with deterministic
+    pacing.
+    """
+    counter = {"n": 0}
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+        counter["n"] += 1
+        if counter["n"] >= cancel_after:
+            raise asyncio.CancelledError
+
+    return sleep

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,13 @@ import httpx2
 import pytest
 from fastapi import FastAPI
 
-from helpers import make_settings, make_video_entry
+from helpers import (
+    counting_sleep,
+    make_settings,
+    make_video_entry,
+    never_sleep,
+    noop_sleep,
+)
 from tldw import worker
 from tldw.audio import CompressError, DownloadResult, ProbeState
 from tldw.config import Settings
@@ -300,31 +306,6 @@ class CountingSendEmbeds:
 # ---------------------------------------------------------------------------
 
 
-async def _noop_sleep(_delay: float) -> None:
-    """Sleep stub for per-record tests that never need to wait."""
-    return None
-
-
-async def _never_sleep(_delay: float) -> None:
-    """Sleep stub that raises if called; pins a path that must not sleep."""
-    raise AssertionError("loop should have returned before sleeping")
-
-
-def _counting_sleep(
-    delays: list[float], *, cancel_after: int
-) -> Callable[[float], Awaitable[None]]:
-    """Return a sleep stub that records delays and cancels the loop after N calls."""
-    calls = {"count": 0}
-
-    async def sleep(delay: float) -> None:
-        delays.append(delay)
-        calls["count"] += 1
-        if calls["count"] >= cancel_after:
-            raise asyncio.CancelledError
-
-    return sleep
-
-
 async def _run_audio(
     queue_store: QueueStore,
     settings: Settings,
@@ -350,7 +331,7 @@ async def _run_audio(
         analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        sleep=_noop_sleep,
+        sleep=noop_sleep,
         now=now,
     )
 
@@ -1061,9 +1042,9 @@ async def test_transcript_loop_requires_openai_api_key(
     monkeypatch.setattr(worker, "_process_record_audio", fake_audio)
 
     # Act
-    # _never_sleep raises if the loop reaches a sleep, so a clean return proves
+    # never_sleep raises if the loop reaches a sleep, so a clean return proves
     # the guard fired before the loop started.
-    await transcript_loop(app, httpx2.AsyncClient(), sleep=_never_sleep)
+    await transcript_loop(app, httpx2.AsyncClient(), sleep=never_sleep)
 
     # Assert
     assert not (tmp_path / "audio").exists()
@@ -1093,7 +1074,7 @@ async def test_transcript_loop_respects_enqueue_delay(
         await transcript_loop(
             app,
             httpx2.AsyncClient(),
-            sleep=_counting_sleep(delays, cancel_after=1),
+            sleep=counting_sleep(delays, cancel_after=1),
             download_audio=download,
             compress_audio=FakeCompress(),
             transcribe=FakeTranscribe(),

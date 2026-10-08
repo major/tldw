@@ -14,20 +14,10 @@ from collections.abc import Awaitable, Callable
 import httpx2
 import pytest
 
-from helpers import make_capturing_transport
+from helpers import make_capturing_transport, recording_sleep
 from tldw.discord import send, send_embeds
 
 _WEBHOOK = "https://discord.example/api/webhooks/123/abc"
-
-
-def _recording_sleep() -> tuple[list[float], Callable[[float], Awaitable[None]]]:
-    """Return a delay list and a sleep stub that records instead of waiting."""
-    delays: list[float] = []
-
-    async def sleep(delay: float) -> None:
-        delays.append(delay)
-
-    return delays, sleep
 
 
 def _sample_embeds() -> list[dict]:
@@ -96,7 +86,7 @@ async def test_send_embeds_retries_once_on_429_with_retry_after() -> None:
         httpx2.Response(429, headers={"Retry-After": "0"}),
         httpx2.Response(204),
     ]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     await _send_embeds_once(captured, responses, _sample_embeds(), sleep=sleep)
 
@@ -108,7 +98,7 @@ async def test_send_embeds_raises_after_second_429() -> None:
     """A second 429 on the same post is not retried again."""
     captured: list[httpx2.Request] = []
     responses = [httpx2.Response(429), httpx2.Response(429)]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     with pytest.raises(httpx2.HTTPStatusError):
         await _send_embeds_once(captured, responses, _sample_embeds(), sleep=sleep)

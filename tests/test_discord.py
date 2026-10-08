@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 import httpx2
 import pytest
 
-from helpers import make_capturing_transport
+from helpers import make_capturing_transport, recording_sleep
 from tldw.discord import (
     DEFAULT_MAX_CHARS,
     DEFAULT_RETRY_AFTER_SECONDS,
@@ -44,16 +44,6 @@ async def _send_once(
             await send(client, _WEBHOOK, content, max_chars=max_chars)
         else:
             await send(client, _WEBHOOK, content, max_chars=max_chars, sleep=sleep)
-
-
-def _recording_sleep() -> tuple[list[float], Callable[[float], Awaitable[None]]]:
-    """Return a delay list and a sleep stub that records instead of waiting."""
-    delays: list[float] = []
-
-    async def sleep(delay: float) -> None:
-        delays.append(delay)
-
-    return delays, sleep
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +261,7 @@ async def test_send_retries_once_on_429_with_retry_after() -> None:
         httpx2.Response(429, headers={"Retry-After": "1.5"}),
         httpx2.Response(200, json={"id": "x"}),
     ]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act
     await _send_once(captured, responses, "hello", sleep=sleep)
@@ -289,7 +279,7 @@ async def test_send_uses_default_retry_after_when_header_missing() -> None:
         httpx2.Response(429),
         httpx2.Response(200, json={"id": "x"}),
     ]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act
     await _send_once(captured, responses, "hello", sleep=sleep)
@@ -304,7 +294,7 @@ async def test_send_raises_after_second_429() -> None:
     # Arrange
     captured: list[httpx2.Request] = []
     responses = [httpx2.Response(429), httpx2.Response(429)]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act / Assert
     with pytest.raises(httpx2.HTTPStatusError):
@@ -321,7 +311,7 @@ async def test_send_uses_default_retry_after_when_header_is_garbage() -> None:
         httpx2.Response(429, headers={"Retry-After": "soon"}),
         httpx2.Response(200, json={"id": "x"}),
     ]
-    delays, sleep = _recording_sleep()
+    delays, sleep = recording_sleep()
 
     # Act
     await _send_once(captured, responses, "hello", sleep=sleep)

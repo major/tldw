@@ -69,6 +69,7 @@ class Settings(BaseSettings):
         TLDW_TRANSCRIBE_MODEL: OpenAI speech-to-text model name.
         TLDW_TRANSCRIBE_LANGS: JSON list of ISO-639-1 language hints for transcription.
         TLDW_TRANSCRIBE_TIMEOUT_SECONDS: per-call transcription timeout.
+        TLDW_INCLUDE_SHORTS: when true, deliver YouTube Shorts too. Default false.
     """
 
     model_config = SettingsConfigDict(
@@ -141,6 +142,11 @@ class Settings(BaseSettings):
     transcribe_langs: list[str] = Field(default_factory=lambda: ["en"])
     transcribe_timeout_seconds: float = Field(default=600.0, gt=0)
 
+    # Shorts filter. When false (the default), notify drops every entry whose
+    # URL points at a YouTube Short so the digest only covers full-length
+    # videos. Set TLDW_INCLUDE_SHORTS=true to keep them.
+    include_shorts: bool = False
+
     @field_validator("audio_format")
     @classmethod
     def _validate_audio_format(cls, value: str) -> str:
@@ -188,6 +194,22 @@ class Settings(BaseSettings):
             return None
         stripped = value.strip()
         return stripped or None
+
+    @field_validator("include_shorts", mode="before")
+    @classmethod
+    def _normalize_include_shorts(cls, value: object) -> object:
+        """Treat a blank or whitespace TLDW_INCLUDE_SHORTS as the default false.
+
+        Pydantic rejects an empty string with a ValidationError, which would
+        break operators who leave the line commented out or trailing in
+        ``.env``. An empty value matches the documented default, so it is
+        normalized to ``False`` before the bool parser runs.
+        """
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return False
+        return value
 
 
 def _validate_channel_ids(channel_ids: list[str]) -> list[str]:

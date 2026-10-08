@@ -38,6 +38,7 @@ _TLDW_ENV_VARS = (
     "TLDW_TRANSCRIBE_MODEL",
     "TLDW_TRANSCRIBE_LANGS",
     "TLDW_TRANSCRIBE_TIMEOUT_SECONDS",
+    "TLDW_INCLUDE_SHORTS",
 )
 
 
@@ -402,3 +403,56 @@ def test_transcribe_timeout_rejects_zero(
     # Act / Assert
     with pytest.raises(ValidationError, match="transcribe_timeout_seconds"):
         Settings(**settings_kwargs(transcribe_timeout_seconds=0))
+
+
+# ---------------------------------------------------------------------------
+# Shorts filter setting
+# ---------------------------------------------------------------------------
+
+
+def test_include_shorts_defaults_to_false(
+    settings_kwargs: Callable[..., dict[str, Any]],
+) -> None:
+    """Shorts are filtered by default so operators focus on full-length videos."""
+    # Arrange
+    # settings_kwargs has already cleared TLDW_INCLUDE_SHORTS.
+
+    # Act
+    settings = Settings(**settings_kwargs())
+
+    # Assert
+    assert settings.include_shorts is False
+
+
+@pytest.mark.parametrize("raw_value", ["1", "true", "True", "yes"])
+def test_include_shorts_reads_truthy_env(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_kwargs: Callable[..., dict[str, Any]],
+    raw_value: str,
+) -> None:
+    """A truthy TLDW_INCLUDE_SHORTS enables shorts delivery."""
+    # Arrange
+    monkeypatch.setenv("TLDW_INCLUDE_SHORTS", raw_value)
+
+    # Act
+    settings = Settings(**settings_kwargs())
+
+    # Assert
+    assert settings.include_shorts is True
+
+
+@pytest.mark.parametrize("raw_value", ["0", "false", "False", "no", ""])
+def test_include_shorts_reads_falsy_env(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_kwargs: Callable[..., dict[str, Any]],
+    raw_value: str,
+) -> None:
+    """A falsy or blank TLDW_INCLUDE_SHORTS keeps shorts filtered."""
+    # Arrange
+    monkeypatch.setenv("TLDW_INCLUDE_SHORTS", raw_value)
+
+    # Act
+    settings = Settings(**settings_kwargs())
+
+    # Assert
+    assert settings.include_shorts is False

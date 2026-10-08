@@ -18,6 +18,11 @@ NS: dict[str, str] = {
     "media": "http://search.yahoo.com/mrss/",
 }
 
+# YouTube Shorts URLs all share this path segment on every known subdomain
+# (www, m, music). Matching on the literal segment is enough because a watch
+# URL never contains ``/shorts/`` and a shorts URL never uses ``/watch?v=``.
+_SHORTS_URL_SEGMENT = "/shorts/"
+
 
 @dataclass(frozen=True, slots=True)
 class VideoEntry:
@@ -52,6 +57,17 @@ def _entry_url(entry: ET.Element) -> str:
     if href is None:
         raise ValueError("entry <link> is missing its href attribute")
     return href
+
+
+def is_short_url(url: str) -> bool:
+    """Return True when ``url`` points at a YouTube Shorts video.
+
+    Every Shorts URL the hub delivers uses the ``/shorts/<id>`` path segment,
+    on whichever subdomain the publisher or the mobile client chose. A watch
+    URL (``/watch?v=<id>``) or a youtu.be share URL never carries that
+    segment, so the substring check is enough to distinguish the two.
+    """
+    return _SHORTS_URL_SEGMENT in url
 
 
 def _parse_entry(entry: ET.Element) -> VideoEntry:

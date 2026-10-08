@@ -67,6 +67,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_TRANSCRIBE_MODEL` | No | `gpt-transcribe` | OpenAI speech-to-text model. `gpt-transcribe` is the current recommended model; the `gpt-4o-transcribe` family is deprecated and shuts down 2027-02-26 |
 | `TLDW_TRANSCRIBE_LANGS` | No | `["en"]` | JSON list of ISO-639-1 language hints to pass to the transcription API |
 | `TLDW_TRANSCRIBE_TIMEOUT_SECONDS` | No | `600` | Per-call transcription timeout, in seconds |
+| `TLDW_INCLUDE_SHORTS` | No | `false` | When `true`, YouTube Shorts are delivered alongside full-length videos. Shorts URLs (`/shorts/<id>`) are filtered out by default so the digest focuses on long-form uploads |
 
 The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
 

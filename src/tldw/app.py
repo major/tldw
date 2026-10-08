@@ -38,7 +38,7 @@ from tldw import hub as tldw_hub
 from tldw import queue as tldw_queue
 from tldw import worker as tldw_worker
 from tldw.config import Settings
-from tldw.feed import parse_atom
+from tldw.feed import is_short_url, parse_atom
 from tldw.renderer import format_video_line
 
 __all__ = ["create_app", "renewal_delay"]
@@ -260,6 +260,8 @@ def create_app(
         """
         body = await request.body()
 
+        settings: Settings = app.state.settings
+
         signatures = request.headers.getlist(_SIGNATURE_HEADER)
         header = signatures[0].strip() if signatures else None
         if header is not None and not header.startswith(_SIGNATURE_PREFIX):
@@ -267,7 +269,7 @@ def create_app(
             # header as if it were missing.
             header = None
 
-        secret = app.state.settings.hub_secret
+        secret = settings.hub_secret
         if secret:
             if header is None:
                 logger.warning("hub delivery is missing a valid %s header", _SIGNATURE_HEADER)
@@ -285,6 +287,22 @@ def create_app(
         except ET.ParseError:
             logger.warning("failed to parse hub delivery body as Atom XML")
             return PlainTextResponse(status_code=200)
+
+        # Shorts are filtered by default so the digest focuses on full-length
+        # videos. Set TLDW_INCLUDE_SHORTS=true (or pass include_shorts=True to
+        # the Settings constructor) to keep them.
+        if not settings.include_shorts:
+            kept = [entry for entry in entries if not is_short_url(entry.url)]
+            dropped = len(entries) - len(kept)
+            if dropped:
+                logger.info(
+                    "filtered shorts from delivery: dropped=%d kept=%d "
+                    "total=%d",
+                    dropped,
+                    len(kept),
+                    len(entries),
+                )
+            entries = kept
 
         store = getattr(app.state, "queue", None)
         for entry in entries:

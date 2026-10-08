@@ -212,17 +212,27 @@ def build_takeaway_embed(
 ) -> dict[str, Any]:
     """Build a single Discord embed dict for one takeaway.
 
-    Discord limits: 4096 chars per description, 6000 chars total per message
-    (across all embeds), 10 embeds max. This builder truncates the description
-    with an ellipsis if it would exceed 4096 chars. The caller is responsible
-    for keeping the total across all embeds under 6000.
+    Discord limits: 256 chars per title, 4096 chars per description, 6000
+    chars total per message (across all embeds), 10 embeds max. This builder
+    truncates the title and description with an ellipsis when they would
+    exceed those caps. The caller is responsible for keeping the total
+    across all embeds under 6000.
+
+    The title is prefixed with the channel name so the video's creator is
+    visible in the channel timeline alongside the takeaway headline. The
+    same channel name also stays in the footer; the title duplication is
+    intentional so the source of the takeaway is obvious when the message
+    is collapsed in the feed.
     """
     bullets_md = "\n".join(_format_bullet(b, video_id) for b in takeaway.bullets)
     description = f"{takeaway.summary}\n\n{bullets_md}" if bullets_md else takeaway.summary
     if len(description) > 4096:
         description = description[:4093] + "..."
+    title = f"{channel_name}: {takeaway.title}"
+    if len(title) > 256:
+        title = title[:253] + "..."
     return {
-        "title": takeaway.title,
+        "title": title,
         "url": video_url,
         "description": description,
         "color": color,

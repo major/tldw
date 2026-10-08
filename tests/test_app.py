@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac as _hmac
-import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -27,6 +26,7 @@ from fastapi.testclient import TestClient
 from helpers import (
     counting_sleep,
     make_capturing_transport,
+    make_channels_file,
     make_settings,
     make_video_entry,
     never_sleep,
@@ -435,25 +435,18 @@ _TOPIC_2 = f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={_CHANNEL_2
 
 
 @pytest.fixture
-def channels_file(tmp_path: Path) -> Path:
-    """Write a channels.json with two valid ids and return its path."""
-    payload = {"channel_ids": [_CHANNEL_1, _CHANNEL_2]}
-    path = tmp_path / "channels.json"
-    path.write_text(json.dumps(payload))
-    return path
-
-
-@pytest.fixture
-def settings_with_channels(tmp_path: Path, channels_file: Path) -> Settings:
+def settings_with_channels(tmp_path: Path) -> Settings:
     """Settings with a callback URL, two channels, and an HMAC secret."""
+    channels_file = make_channels_file(tmp_path, [_CHANNEL_1, _CHANNEL_2])
     return make_settings(
         tmp_path, channel_ids_file=channels_file, hub_secret="topsecret"
     )
 
 
 @pytest.fixture
-def settings_without_callback(tmp_path: Path, channels_file: Path) -> Settings:
+def settings_without_callback(tmp_path: Path) -> Settings:
     """Settings with channels but no callback URL."""
+    channels_file = make_channels_file(tmp_path, [_CHANNEL_1, _CHANNEL_2])
     return make_settings(
         tmp_path,
         channel_ids_file=channels_file,
@@ -465,9 +458,7 @@ def settings_without_callback(tmp_path: Path, channels_file: Path) -> Settings:
 @pytest.fixture
 def empty_channels_file(tmp_path: Path) -> Path:
     """An empty channels.json (no channel_ids key with content)."""
-    path = tmp_path / "channels.json"
-    path.write_text(json.dumps({"channel_ids": []}))
-    return path
+    return make_channels_file(tmp_path, [])
 
 
 @pytest.fixture

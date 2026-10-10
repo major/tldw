@@ -239,6 +239,41 @@ def test_download_audio_classifies_unavailable(tmp_path: Path) -> None:
     assert result.path is None
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        # The verbatim error string the extractor emits against a cluster
+        # egress IP that's been bot-checked.
+        "unable to download video data: HTTP Error 403: Forbidden",
+        # A bare 403 without the colon-suffix is enough for the classifier.
+        "HTTP Error 403",
+        # A login-wall message that also carries "Forbidden".
+        "Forbidden - You must be signed in to watch this video",
+    ],
+)
+def test_download_audio_classifies_403_as_unavailable(
+    tmp_path: Path, message: str
+) -> None:
+    """An HTTP 403 from the media server is treated as permanently UNAVAILABLE.
+
+    The 403 family is what cluster egress IPs see when YouTube rejects the
+    request before a media token is even considered. Backing off and retrying
+    just wastes the 48h give-up window against a hard IP block.
+    """
+    # Arrange
+    dest = tmp_path / "audio"
+    opts = build_audio_ydl_opts(dest)
+    ydl = _fake(error=DownloadError(message))
+
+    # Act
+    result = download_audio(_SHORT_URL, opts=opts, ydl_class=ydl, dest_dir=dest)
+
+    # Assert
+    assert result.state == ProbeState.UNAVAILABLE
+    assert result.path is None
+    assert result.detail == "forbidden"
+
+
 def test_download_audio_classifies_unknown_as_not_ready(tmp_path: Path) -> None:
     """An unseen download error is retryable and keeps the raw detail."""
     # Arrange

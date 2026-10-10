@@ -81,21 +81,32 @@ class ProbeState(StrEnum):
 
     READY = "READY"  # media file written
     NOT_READY = "NOT_READY"  # no media; either pending or never (worker decides)
-    UNAVAILABLE = "UNAVAILABLE"  # video private/removed/bot-checked; permanent
+    UNAVAILABLE = "UNAVAILABLE"  # video private/removed/bot-checked/forbidden; permanent
     RATE_LIMITED = "RATE_LIMITED"  # HTTP 429; transient
+
+
+# HTTP 403 from the media server is bot-checked traffic: the cluster egress IP
+# is rejected before any media token is even considered, and the failed
+# ladder below emits "unable to download video data: HTTP Error 403:
+# Forbidden" verbatim. Treating it as transient lets a single stuck video
+# burn the full 48h give-up window against a hard IP block, so we surface it
+# as a permanent UNAVAILABLE instead. Recovery needs a working PO token or
+# cookies file, not a fresh attempt.
+_RE_FORBIDDEN = re.compile(r"HTTP Error 403|Forbidden")
 
 
 def classify_error(message: str) -> tuple[ProbeState, str]:
     """Map a yt-dlp error message to ``(ProbeState, short detail)``.
 
-    Priority is 429, then unavailable, then missing PO token, then an unknown
-    fallback. The fallback is NOT_READY rather than a hard failure: a message we
-    have never seen is far more likely to be a transient extractor quirk than a
-    permanently dead video. Callers that need to distinguish will see the raw
-    message in the detail.
+    Priority is 429, then unavailable (including HTTP 403), then missing PO
+    token, then an unknown fallback. The 403 case sits with the unavailable
+    family: cluster egress IPs hit bot checks long before a media URL resolves,
+    so a fresh retry just wastes the 48h give-up window.
     """
     if _RE_429.search(message):
         return ProbeState.RATE_LIMITED, "rate_limited"
+    if _RE_FORBIDDEN.search(message):
+        return ProbeState.UNAVAILABLE, "forbidden"
     if _RE_UNAVAILABLE.search(message):
         return ProbeState.UNAVAILABLE, "unavailable"
     if _RE_PO_TOKEN.search(message):

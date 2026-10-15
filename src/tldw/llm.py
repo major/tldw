@@ -24,12 +24,15 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
-from pydantic_ai.models.openai import (
-    OpenAIChatModelSettings,
-    OpenAIResponsesModel,
-    OpenAIResponsesModelSettings,
-)
-from pydantic_ai.providers.openai import OpenAIProvider
+
+# Lazy imports (PEP 810): ``pydantic_ai.models.openai`` and
+# ``pydantic_ai.providers.openai`` are only used when the production analyzer
+# actually runs. Tests that inject ``model=...`` never reach the code path,
+# so deferring the import keeps the cold path free of the pydantic-ai model
+# graph and its transitive OpenAI plumbing.
+lazy from pydantic_ai.models.openai import OpenAIResponsesModel
+lazy from pydantic_ai.models.openai import OpenAIResponsesModelSettings
+lazy from pydantic_ai.providers.openai import OpenAIProvider
 
 from tldw.config import Settings
 

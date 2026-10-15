@@ -11,12 +11,17 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
 # Single source of truth for the three namespaces a YouTube feed uses. Keeping
-# them in one dict avoids scattering namespace string literals across the code.
-NS: dict[str, str] = {
-    "atom": "http://www.w3.org/2005/Atom",
-    "yt": "http://www.youtube.com/xml/schemas/2015",
-    "media": "http://search.yahoo.com/mrss/",
-}
+# them in one immutable mapping avoids scattering namespace string literals
+# across the code, and ``frozendict`` (PEP 814, builtin in 3.15) makes the
+# read-only contract a runtime guarantee: any accidental item assignment
+# raises ``TypeError``.
+NS: frozendict[str, str] = frozendict(
+    {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+        "media": "http://search.yahoo.com/mrss/",
+    }
+)
 
 # YouTube Shorts URLs all share this path segment on every known subdomain
 # (www, m, music). Matching on the literal segment is enough because a watch

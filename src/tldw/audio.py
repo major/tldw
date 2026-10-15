@@ -31,6 +31,14 @@ from types import TracebackType
 from typing import Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
+# Lazy imports (PEP 810): ``yt_dlp`` is only used inside ``download_audio`` and
+# is the heaviest transitive dep this module touches. Deferring the import
+# keeps ``tldw.audio`` importable without paying the yt-dlp load cost, which
+# matters for tests that inject a fake ``YoutubeDL`` and for the case where
+# the worker is configured without a download backend.
+lazy import yt_dlp
+lazy from yt_dlp.utils import YoutubeDLError
+
 __all__ = [
     "ProbeState",
     "DownloadResult",
@@ -221,11 +229,9 @@ def download_audio(
     but no file landed on disk, the result is NOT_READY so the worker retries.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
-    # Import inside the function so importing this module has no yt-dlp side
-    # effects and tests can inject a fake YoutubeDL without the real library.
-    import yt_dlp
-    from yt_dlp.utils import YoutubeDLError
-
+    # ``yt_dlp`` and ``YoutubeDLError`` are declared as module-level lazy
+    # imports (PEP 810), so importing this module does not load them; the
+    # proxy resolves them transparently on first attribute access below.
     factory: Callable[..., YoutubeDLProtocol]
     if ydl_class is None:
         # yt-dlp ships no type stubs, so its class is cast to the protocol we

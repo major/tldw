@@ -37,11 +37,19 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-import openai
 import httpx2
 from fastapi import FastAPI
 from pydantic import ValidationError
-import pydantic_ai.exceptions
+
+# Lazy imports (PEP 810): ``openai`` exception classes and
+# ``pydantic_ai.exceptions`` are only referenced inside ``except`` clauses
+# below. Eagerly loading ``openai`` here pulls its full client stack
+# (httpx, distro, etc.) at module import time, which is wasted work when
+# the worker is configured without a key (the transcript pipeline refuses
+# to start, so every exception path is dead code in that mode). Defer the
+# load to first reference and let the cost ride with the error path.
+lazy import openai
+lazy import pydantic_ai.exceptions
 
 from tldw.audio import (
     CompressError,

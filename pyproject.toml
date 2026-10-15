@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Major Hayden", email = "major@mhtx.net" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
     "curl_cffi>=0.13,<1",
     "fastapi>=0.110,<1",

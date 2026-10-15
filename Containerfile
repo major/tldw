@@ -1,10 +1,10 @@
-# Official Python 3.14 image on Docker Hub, the full Debian-based variant
-# (not `python:3.14-slim`). The image is layered on top of
+# Official Python 3.15 image on Docker Hub, the full Debian-based variant
+# (not `python:3.15-slim`). The image is layered on top of
 # `buildpack-deps:bookworm`, so it ships with pip, the Python development
 # headers, and the toolchain (gcc, make, etc.) needed to compile the project's
 # wheels. That makes it suitable for both the builder stage below and the
 # runtime stage at the bottom of this file.
-FROM python:3.14@sha256:c23ebccb22bca6335521be462d1d4a3449a623c5ca8ce513d163c79c636dae79 AS builder
+FROM python:3.15@sha256:71eaf9113355d104ebcd81e7113ca21b09f65e96bc200906414e403427b258bb AS builder
 
 ENV PATH="/tmp/.local/bin:${PATH}"
 
@@ -16,7 +16,7 @@ COPY --chown=0:0 src ./src
 COPY --chown=0:0 channels.json ./
 
 RUN python3 -m pip install --no-cache-dir uv==0.12.18 \
-    && uv sync --locked --no-dev --no-editable --python python3.14
+    && uv sync --locked --no-dev --no-editable --python python3.15
 
 # yt-dlp needs a JavaScript runtime (Deno) to solve YouTube's player JS and
 # extract formats. Without it the YouTube extractor logs:
@@ -34,7 +34,7 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # Same official image for the runtime stage. Using the full Debian variant
 # keeps the system libraries yt-dlp reaches into (libsqlite3, libssl, etc.)
 # present, and gives us apt-get for installing ffmpeg below.
-FROM python:3.14@sha256:c23ebccb22bca6335521be462d1d4a3449a623c5ca8ce513d163c79c636dae79
+FROM python:3.15@sha256:71eaf9113355d104ebcd81e7113ca21b09f65e96bc200906414e403427b258bb
 
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown

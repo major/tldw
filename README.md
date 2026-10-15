@@ -14,7 +14,7 @@ cd tldw
 uv sync --all-extras --dev
 ```
 
-`uv` reads `uv.lock` so the install is deterministic. Python 3.14 is required. :lock:
+`uv` reads `uv.lock` so the install is deterministic. Python 3.15 is required. :lock:
 
 ## Configure :gear:
 
@@ -126,7 +126,7 @@ On startup `tldw` prints one log line per channel it subscribes to. On shutdown 
 ## Run with container :whale:
 
 A multi-stage `Containerfile` and `compose.yml` ship with the repo. They pin
-the official `python:3.14` (full Debian-based image, not the `-slim`
+the official `python:3.15` (full Debian-based image, not the `-slim`
 variant), install the locked runtime dependencies plus `ffmpeg` for
 `yt-dlp` postprocessing, and run as a non-root user. The default
 `channels.json` is baked into the image; override the channel list with

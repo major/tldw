@@ -31,6 +31,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel  #
 from helpers import make_settings, make_takeaways  # noqa: E402
 from tldw.config import Settings  # noqa: E402
 from tldw.llm import (  # noqa: E402
+    BULLET_MAX_CHARS,
+    MAX_WATCH_ITEMS,
     SYSTEM_PROMPT,
     Cue,
     OpenAIAnalyzer,
@@ -53,9 +55,13 @@ def _takeaway(index: int = 0, *, bullet_count: int = 1) -> Takeaway:
     )
 
 
-def _valid_payload(*, bullets_per_item: int = 1) -> dict[str, object]:
-    """Build a JSON-ready payload with exactly three valid takeaways."""
+def _valid_payload(
+    *, bullets_per_item: int = 1, watch: tuple[str, ...] = ()
+) -> dict[str, object]:
+    """Build a JSON-ready payload with a header and exactly three takeaways."""
     return {
+        "bottom_line": "Bottom line for the trader.",
+        "watch": list(watch),
         "items": [
             {
                 "title": f"Takeaway {i}",
@@ -96,7 +102,7 @@ def test_takeaways_rejects_two_or_four_items(count: int) -> None:
     """Takeaways requires exactly three items."""
     items = [_takeaway(i) for i in range(count)]
     with pytest.raises(ValidationError):
-        Takeaways(items=items)
+        Takeaways(bottom_line="Bottom line", items=items)
 
 
 def test_takeaway_requires_at_least_one_bullet() -> None:
@@ -109,6 +115,23 @@ def test_takeaway_bullet_timestamp_must_be_non_negative() -> None:
     """A negative bullet timestamp fails validation."""
     with pytest.raises(ValidationError):
         TakeawayBullet(text="b", timestamp_seconds=-1)
+
+
+def test_takeaway_bullet_rejects_text_over_max_chars() -> None:
+    """A bullet longer than BULLET_MAX_CHARS fails validation."""
+    with pytest.raises(ValidationError):
+        TakeawayBullet(text="x" * (BULLET_MAX_CHARS + 1))
+
+
+def test_takeaways_rejects_more_than_max_watch_items() -> None:
+    """A watch list longer than MAX_WATCH_ITEMS fails validation."""
+    watch = [f"SPY {i}" for i in range(MAX_WATCH_ITEMS + 1)]
+    with pytest.raises(ValidationError):
+        Takeaways(
+            bottom_line="Bottom line",
+            watch=watch,
+            items=[_takeaway(i) for i in range(3)],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +193,7 @@ async def test_openai_analyzer_times_out() -> None:
 async def test_openai_analyzer_truncates_oversized_transcript(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A transcript over the cap is truncated before it reaches the model."""
+    """A transcript over the cap is truncated; the title header is not counted."""
     payload = _valid_payload()
     seen: dict[str, str] = {}
 
@@ -184,8 +207,23 @@ async def test_openai_analyzer_truncates_oversized_transcript(
     with caplog.at_level(logging.WARNING):
         await analyzer.analyze("x" * 500, video_id="vid1", title="Title")
 
-    assert len(seen["prompt"]) <= 100
+    assert seen["prompt"] == "Video title: Title\n---\n" + "x" * 100
     assert any("truncating" in record.message for record in caplog.records)
+
+
+async def test_openai_analyzer_sends_title_header_before_transcript() -> None:
+    """The user message starts with the video title, a rule, then the transcript."""
+    payload = _valid_payload()
+    seen: dict[str, str] = {}
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen["prompt"] = _user_prompt(messages)
+        return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
+
+    analyzer = OpenAIAnalyzer(make_settings(openai_api_key="test-key"), model=_function_model(respond))
+    await analyzer.analyze("[0:00] SPY is testing 500.", video_id="vid1", title="Market Open")
+
+    assert seen["prompt"] == "Video title: Market Open\n---\n[0:00] SPY is testing 500."
 
 
 async def test_openai_analyzer_caps_bullets() -> None:
@@ -200,6 +238,23 @@ async def test_openai_analyzer_caps_bullets() -> None:
     )
     result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
+    assert all(len(item.bullets) == 2 for item in result.items)
+
+
+async def test_openai_analyzer_cap_bullets_keeps_bottom_line_and_watch() -> None:
+    """Capping bullets must not drop the header fields bottom_line and watch."""
+    payload = _valid_payload(bullets_per_item=4, watch=("SPY 500 if reclaimed",))
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
+
+    analyzer = OpenAIAnalyzer(
+        make_settings(openai_api_key="test-key", takeaway_max_bullets=2), model=_function_model(respond)
+    )
+    result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
+
+    assert result.bottom_line == "Bottom line for the trader."
+    assert result.watch == ["SPY 500 if reclaimed"]
     assert all(len(item.bullets) == 2 for item in result.items)
 
 
@@ -385,6 +440,20 @@ def test_system_prompt_mentions_optional_timestamps() -> None:
     assert "timestamp_seconds" in SYSTEM_PROMPT
 
 
-def test_system_prompt_requires_us_english_output() -> None:
-    """The prompt forces US English output, even for a non-English transcript."""
-    assert "US English" in SYSTEM_PROMPT
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "bottom_line",
+        "watch",
+        "US English",
+        "If X, then Y",
+    ],
+)
+def test_system_prompt_contains_briefing_rule(rule: str) -> None:
+    """The prompt asks for the briefing header, watch conditions, and US English."""
+    assert rule in SYSTEM_PROMPT
+
+
+def test_system_prompt_drops_ungrounded_fact_rule() -> None:
+    """The old rule that blanked audio-only output is gone from the prompt."""
+    assert "Omit anything you cannot ground" not in SYSTEM_PROMPT

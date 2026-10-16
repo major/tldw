@@ -25,12 +25,11 @@ def _sample_embeds() -> list[dict]:
     return [{"title": "T", "description": "D", "color": 0x5865F2}]
 
 
-def _three_sample_embeds() -> list[dict]:
-    """Return three minimal embed dicts with distinguishable titles."""
+def _embeds(count: int) -> list[dict]:
+    """Return ``count`` minimal embeds with distinguishable titles."""
     return [
-        {"title": "First", "description": "D1", "color": 0x5865F2},
-        {"title": "Second", "description": "D2", "color": 0x5865F2},
-        {"title": "Third", "description": "D3", "color": 0x5865F2},
+        {"title": f"Embed {n}", "description": f"D{n}", "color": 0x5865F2}
+        for n in range(count)
     ]
 
 
@@ -55,28 +54,39 @@ async def _send_embeds_once(
 # ---------------------------------------------------------------------------
 
 
-async def test_send_embeds_posts_one_request_per_embed() -> None:
-    """The happy path posts one request per embed so each is a feed item."""
+async def test_send_embeds_posts_all_embeds_in_one_request() -> None:
+    """The whole briefing goes out as one request carrying every embed."""
+    # Arrange
     captured: list[httpx2.Request] = []
-    embeds = _three_sample_embeds()
+    embeds = _embeds(4)
 
+    # Act
     await _send_embeds_once(captured, [], embeds)
 
-    assert len(captured) == len(embeds)
-    for request, embed in zip(captured, embeds):
-        body = json.loads(request.content.decode("utf-8"))
-        assert body == {"embeds": [embed]}
+    # Assert
+    assert len(captured) == 1
+    body = json.loads(captured[0].content.decode("utf-8"))
+    assert body == {"embeds": embeds}
 
 
 async def test_send_embeds_posts_to_webhook_url_with_wait_true() -> None:
-    """Every request targets the webhook URL with ?wait=true appended."""
+    """The request targets the webhook URL with ?wait=true appended."""
     captured: list[httpx2.Request] = []
 
-    await _send_embeds_once(captured, [], _three_sample_embeds())
+    await _send_embeds_once(captured, [], _embeds(4))
 
-    assert len(captured) == 3
-    for request in captured:
-        assert str(request.url).endswith("?wait=true")
+    assert len(captured) == 1
+    assert str(captured[0].url).endswith("?wait=true")
+
+
+@pytest.mark.parametrize("count", [1, 10])
+async def test_send_embeds_accepts_between_one_and_ten_embeds(count: int) -> None:
+    """Discord's per-message embed range, 1 to 10 inclusive, is accepted."""
+    captured: list[httpx2.Request] = []
+
+    await _send_embeds_once(captured, [], _embeds(count))
+
+    assert len(captured) == 1
 
 
 async def test_send_embeds_retries_once_on_429_with_retry_after() -> None:
@@ -105,13 +115,15 @@ async def test_send_embeds_raises_after_second_429() -> None:
     assert len(captured) == 2
 
 
-async def test_send_embeds_raises_on_empty_embeds() -> None:
-    """An empty embed list is a caller bug, not a no-op."""
+@pytest.mark.parametrize("count", [0, 11], ids=["empty", "over_limit"])
+async def test_send_embeds_rejects_invalid_embed_counts(count: int) -> None:
+    """Zero or more than 10 embeds is a caller bug and sends nothing."""
     captured: list[httpx2.Request] = []
     transport = make_capturing_transport(captured, [], default_status=204)
+
     async with httpx2.AsyncClient(transport=transport) as client:
         with pytest.raises(ValueError):
-            await send_embeds(client, _WEBHOOK, [])
+            await send_embeds(client, _WEBHOOK, _embeds(count))
 
     assert captured == []
 

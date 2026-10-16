@@ -18,7 +18,7 @@ import asyncio
 import bisect
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
@@ -53,25 +53,59 @@ logger = logging.getLogger(__name__)
 # the model one chance to correct a bad shape and one to recover from a flake.
 DEFAULT_OUTPUT_RETRIES: int = 2
 
+# Length caps that keep the whole briefing inside ONE Discord message, which
+# allows at most 6000 characters across all embeds. Worst case:
+#   3 x (120 + 400 + 5 x 200) = 4560 for the takeaways
+#   300 + 4 x 150             =  900 for the header
+# That leaves about 500 characters for embed titles and the footer.
+TITLE_MAX_CHARS: int = 120
+SUMMARY_MAX_CHARS: int = 400
+BULLET_MAX_CHARS: int = 200
+MAX_BULLETS: int = 5
+BOTTOM_LINE_MAX_CHARS: int = 300
+WATCH_ITEM_MAX_CHARS: int = 150
+MAX_WATCH_ITEMS: int = 4
+
 # The transcript may arrive with [m:ss] / [h:mm:ss] anchors, or without (the
 # model does the segmenting itself). The prompt asks for timestamps when anchors
-# are present and lets the model omit the field when they are not.
+# are present and lets the model omit the field when they are not. Audio-only
+# runs have no anchors, so the prompt must not demand a clear moment for every
+# fact; that rule made the output vague.
 SYSTEM_PROMPT = (
-    "You turn a YouTube transcript into structured takeaways for a busy reader.\n"
-    "Return exactly 3 takeaways.\n"
-    "Each takeaway has a short title (a few words), a one or two sentence "
-    "summary, and one to five bullets.\n"
+    "You write a trading briefing from a YouTube market video for an active "
+    "trader who will not watch it. The trader wants to know what the speaker "
+    "concludes, which levels and catalysts matter, and what would change the "
+    "view.\n"
+    "Return a bottom_line, a watch list, and exactly 3 takeaways, most important "
+    "first.\n"
+    "bottom_line: one sentence with the speaker's overall stance (bullish, "
+    "bearish, neutral, or mixed), the main reason, and the time frame if one is "
+    "given.\n"
+    "watch: up to 4 short items the trader should track, each with a ticker or "
+    "index plus a price level, date, data release, or event. Write conditions as "
+    '"If X, then Y". Use an empty list when the video gives nothing concrete.\n'
+    "Each takeaway has a title, a summary, and one to five bullets.\n"
+    "Title: a claim, not a topic. Good: \"SMH bounce needs a base before any "
+    'rally". Bad: "Semiconductor update".\n'
+    "Summary: one or two sentences that state the conclusion first.\n"
+    "Bullets: each one holds something concrete: a ticker, price level, "
+    "percentage, options or gamma level (put wall, call wall), moving average, "
+    "date, data release, or trade setup. Bold tickers and key levels with ** in "
+    "titles, bullets, and watch items.\n"
+    "Keep the speaker's stance and confidence. Mark opinions and predictions as "
+    "the speaker's view. Never add trade advice, targets, or levels the speaker "
+    "did not give.\n"
+    'Write directly. Never write "the speaker says", "the narrator", or "in this '
+    'video".\n'
+    "Skip filler, sponsor reads, channel plugs, and requests to like or subscribe.\n"
     "When the transcript marks moments as [m:ss] or [h:mm:ss] anchors at the "
-    "start of each block, set timestamp_seconds to the moment the bullet "
-    "refers to. Compute the seconds from those anchors. When the transcript "
-    "has no anchors, omit timestamp_seconds entirely; the worker renders the "
-    "bullet as a plain line in that case.\n"
-    "Only include a fact when the transcript gives a clear moment for it. "
-    "Omit anything you cannot ground in a specific moment.\n"
-    "Prefer concrete claims, numbers, and named topics over vague filler.\n"
+    "start of each block, set timestamp_seconds to the moment the bullet refers "
+    "to, computed from those anchors. When the transcript has no anchors, omit "
+    "timestamp_seconds. Concrete details are still wanted when there are no "
+    "anchors.\n"
     "Never invent details that are not in the transcript.\n"
-    "Always write every title, summary, and bullet in US English, even when "
-    "the transcript is in another language."
+    "Always write every field in US English, even when the transcript is in "
+    "another language."
 )
 
 
@@ -84,23 +118,32 @@ class TakeawayBullet(BaseModel):
     otherwise.
     """
 
-    text: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=BULLET_MAX_CHARS)
     timestamp_seconds: int | None = Field(default=None, ge=0)
 
 
 class Takeaway(BaseModel):
     """One takeaway: a short title, a summary, and supporting bullets."""
 
-    title: str = Field(min_length=1, max_length=200)
-    summary: str = Field(max_length=1000)
+    title: str = Field(min_length=1, max_length=TITLE_MAX_CHARS)
+    summary: str = Field(max_length=SUMMARY_MAX_CHARS)
     # The floor is one bullet. The per-config cap is applied by the analyzer,
     # since a Pydantic Field cannot cleanly reference a runtime setting.
-    bullets: list[TakeawayBullet] = Field(min_length=1)
+    bullets: list[TakeawayBullet] = Field(min_length=1, max_length=MAX_BULLETS)
 
 
 class Takeaways(BaseModel):
-    """The complete model output: exactly three takeaways."""
+    """The complete model output: a briefing header plus three takeaways.
 
+    ``bottom_line`` is the one-sentence verdict and ``watch`` holds the
+    concrete levels, catalysts, and conditions to track. Both render in the
+    header embed of the single Discord message.
+    """
+
+    bottom_line: str = Field(min_length=1, max_length=BOTTOM_LINE_MAX_CHARS)
+    watch: list[Annotated[str, Field(min_length=1, max_length=WATCH_ITEM_MAX_CHARS)]] = (
+        Field(default_factory=list, max_length=MAX_WATCH_ITEMS)
+    )
     items: list[Takeaway] = Field(min_length=3, max_length=3)
 
 
@@ -145,7 +188,10 @@ class OpenAIAnalyzer:
     ) -> Takeaways:
         """Run the LLM and return validated takeaways.
 
-        Oversized input is truncated with a warning rather than rejected. A
+        Oversized transcripts are truncated with a warning rather than
+        rejected; the cap applies to the transcript only, not the title header
+        sent ahead of it. The user message is ``Video title: <title>`` followed
+        by a ``---`` line and the transcript, so the model sees the title. A
         fresh client is built per call: the worker is serial, so connection
         reuse is not worth leaking one video's session into another. The
         per-takeaway bullet cap is applied after validation.
@@ -158,6 +204,7 @@ class OpenAIAnalyzer:
                 self._settings.llm_max_input_chars,
             )
             transcript = transcript[: self._settings.llm_max_input_chars]
+        user_prompt = f"Video title: {title}\n---\n{transcript}"
 
         async with self._build_client() as client:
             model = self._model_override or OpenAIResponsesModel(
@@ -176,7 +223,7 @@ class OpenAIAnalyzer:
                 ),
             )
             result = await asyncio.wait_for(
-                agent.run(transcript, message_history=[]),
+                agent.run(user_prompt, message_history=[]),
                 timeout=self._settings.llm_timeout_seconds,
             )
             takeaways = result.output
@@ -184,7 +231,11 @@ class OpenAIAnalyzer:
         return self._cap_bullets(takeaways)
 
     def _cap_bullets(self, takeaways: Takeaways) -> Takeaways:
-        """Return takeaways with each item's bullets capped at the config limit."""
+        """Return takeaways with each item's bullets capped at the config limit.
+
+        ``model_copy`` keeps the header fields (``bottom_line`` and ``watch``)
+        that a fresh ``Takeaways(items=...)`` would drop.
+        """
         cap = self._settings.takeaway_max_bullets
         if cap <= 0:
             return takeaways
@@ -192,7 +243,7 @@ class OpenAIAnalyzer:
             item.model_copy(update={"bullets": item.bullets[:cap]})
             for item in takeaways.items
         ]
-        return Takeaways(items=capped_items)
+        return takeaways.model_copy(update={"items": capped_items})
 
 
 @dataclass(frozen=True)

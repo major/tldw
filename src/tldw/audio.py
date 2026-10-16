@@ -143,7 +143,8 @@ def build_audio_ydl_opts(
     lossy encodes in a row waste quality for nothing.
 
     The format chain prefers an audio-only webm, then an audio-only m4a, then
-    any audio-only stream, and ``format_sort`` breaks ties toward the smallest
+    any audio-only stream. ``format_sort`` prefers the original-language
+    track over auto-dubbed ones, then breaks ties toward the smallest
     bitrate and size. The player client ladder starts with ``visionos``;
     ``tv_embedded`` was removed in 2026.
 
@@ -152,7 +153,11 @@ def build_audio_ydl_opts(
     """
     opts: dict[str, object] = {
         "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio",
-        "format_sort": ["+abr", "+size"],
+        # ``lang`` must come first. yt-dlp puts user sort fields ahead of its
+        # defaults, so without it ``+abr`` picks the smallest track, which is
+        # often one of YouTube's auto-dubbed tracks (French, Telugu, ...)
+        # instead of the original audio.
+        "format_sort": ["lang", "+abr", "+size"],
         "outtmpl": str(dest_dir / "%(id)s.%(ext)s"),
         "quiet": True,
         "noprogress": True,

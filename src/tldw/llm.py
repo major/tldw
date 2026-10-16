@@ -69,7 +69,9 @@ SYSTEM_PROMPT = (
     "Only include a fact when the transcript gives a clear moment for it. "
     "Omit anything you cannot ground in a specific moment.\n"
     "Prefer concrete claims, numbers, and named topics over vague filler.\n"
-    "Never invent details that are not in the transcript."
+    "Never invent details that are not in the transcript.\n"
+    "Always write every title, summary, and bullet in US English, even when "
+    "the transcript is in another language."
 )
 
 

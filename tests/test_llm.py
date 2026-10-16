@@ -383,3 +383,8 @@ def test_snap_timestamps_preserves_none_values() -> None:
 def test_system_prompt_mentions_optional_timestamps() -> None:
     """The prompt tells the model it may omit timestamp_seconds."""
     assert "timestamp_seconds" in SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_us_english_output() -> None:
+    """The prompt forces US English output, even for a non-English transcript."""
+    assert "US English" in SYSTEM_PROMPT

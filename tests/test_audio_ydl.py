@@ -86,7 +86,13 @@ _ID_LESS_URL = "https://youtu.be/"
 
 
 def test_build_audio_ydl_opts_default_format_chain(tmp_path: Path) -> None:
-    """The format chain prefers webm/m4a audio-only, smallest first."""
+    """The format chain prefers webm/m4a audio-only, original language first.
+
+    ``lang`` must lead ``format_sort``. yt-dlp puts user sort fields ahead
+    of its defaults, so a leading ``+abr`` picks the smallest track, which
+    is often a YouTube auto-dubbed track (French, Telugu, ...) instead of
+    the original audio.
+    """
     # Arrange
     # tmp_path stands in for the download destination.
 
@@ -95,7 +101,58 @@ def test_build_audio_ydl_opts_default_format_chain(tmp_path: Path) -> None:
 
     # Assert
     assert opts["format"] == "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio"
-    assert opts["format_sort"] == ["+abr", "+size"]
+    assert opts["format_sort"] == ["lang", "+abr", "+size"]
+
+
+def _audio_format(format_id: str, language: str, preference: int, abr: float) -> dict[str, object]:
+    """Build one audio-only format dict shaped like yt-dlp's YouTube output.
+
+    YouTube marks the original track with ``language_preference=10`` and
+    auto-dubbed tracks with ``-1``.
+    """
+    return {
+        "format_id": format_id,
+        "url": f"https://example.invalid/{format_id}",
+        "ext": "webm",
+        "vcodec": "none",
+        "acodec": "opus",
+        "abr": abr,
+        "language": language,
+        "language_preference": preference,
+        "protocol": "https",
+    }
+
+
+def test_build_audio_ydl_opts_selects_original_over_smaller_dub(tmp_path: Path) -> None:
+    """The real yt-dlp selector picks the original track, not a smaller dub.
+
+    Regression: with ``format_sort=["+abr", "+size"]`` yt-dlp picked the
+    lowest-bitrate auto-dubbed track, so summaries came out in Telugu or
+    French. This runs the real selector offline (``download=False``).
+    """
+    # Arrange
+    import yt_dlp
+
+    info = {
+        "id": "vid",
+        "title": "t",
+        "extractor": "youtube",
+        "extractor_key": "Youtube",
+        "webpage_url": "https://example.invalid",
+        "formats": [
+            _audio_format("original", "en-US", 10, 50.5),
+            _audio_format("dub-fr", "fr-FR", -1, 48.6),
+            _audio_format("dub-te", "te", -1, 47.0),
+        ],
+    }
+    opts = build_audio_ydl_opts(tmp_path)
+
+    # Act
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        result = ydl.process_ie_result(info, download=False)
+
+    # Assert
+    assert result["format_id"] == "original"
 
 
 def test_build_audio_ydl_opts_uses_2026_player_clients(tmp_path: Path) -> None:

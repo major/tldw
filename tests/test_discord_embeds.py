@@ -90,7 +90,6 @@ def _embed(takeaways: Takeaways | None = None, *, index: int = 1) -> dict:
     return build_takeaway_embed(
         model.items[0],
         video_id=_VIDEO_ID,
-        video_url=_VIDEO_URL,
         index=index,
     )
 
@@ -200,17 +199,27 @@ def test_build_header_embed_truncates_oversized_title() -> None:
 
 
 def test_build_takeaway_embed_has_expected_keys() -> None:
-    """A takeaway embed carries title, url, description, and color, and no footer."""
+    """A takeaway embed carries title, description, and color, and no url or footer."""
     embed = _embed()
 
-    assert set(embed) == {"title", "url", "description", "color"}
+    assert set(embed) == {"title", "description", "color"}
 
 
-def test_build_takeaway_embed_url_is_video_url() -> None:
-    """The embed url is the passed video url, making the title clickable."""
-    embed = _embed()
+def test_build_takeaway_embeds_only_header_has_url() -> None:
+    """Only the header links to the video, so Discord does not merge the embeds.
 
-    assert embed["url"] == _VIDEO_URL
+    Regression: Discord merges embeds in one message that share a ``url``
+    and shows only the first embed's text, which hid all three takeaways.
+    """
+    # Arrange
+    takeaways = _briefing()
+
+    # Act
+    embeds = _build_all(takeaways)
+
+    # Assert
+    assert embeds[0]["url"] == _VIDEO_URL
+    assert all("url" not in embed for embed in embeds[1:])
 
 
 def test_build_takeaway_embed_default_color() -> None:
@@ -265,7 +274,7 @@ def test_build_takeaway_embed_truncates_oversized_description() -> None:
     )
 
     embed = build_takeaway_embed(
-        takeaway, video_id=_VIDEO_ID, video_url=_VIDEO_URL, index=1
+        takeaway, video_id=_VIDEO_ID, index=1
     )
 
     description = embed["description"]
@@ -286,7 +295,7 @@ def test_build_takeaway_embed_truncates_oversized_title() -> None:
     )
 
     embed = build_takeaway_embed(
-        takeaway, video_id=_VIDEO_ID, video_url=_VIDEO_URL, index=1
+        takeaway, video_id=_VIDEO_ID, index=1
     )
 
     assert len(embed["title"]) == 256
@@ -435,7 +444,7 @@ def test_build_takeaway_embed_works_with_none_timestamps() -> None:
     )
 
     embed = build_takeaway_embed(
-        takeaway, video_id=_VIDEO_ID, video_url=_VIDEO_URL, index=1
+        takeaway, video_id=_VIDEO_ID, index=1
     )
 
     assert _bullet_lines(embed) == ["- Point 0", "- Point 1", "- Point 2"]

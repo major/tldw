@@ -38,7 +38,7 @@ from tldw import hub as tldw_hub
 from tldw import queue as tldw_queue
 from tldw import worker as tldw_worker
 from tldw.config import Settings
-from tldw.feed import is_short_url, parse_atom
+from tldw.feed import VideoEntry, is_short_url, parse_atom
 from tldw.renderer import format_video_line
 
 __all__ = ["create_app", "renewal_delay"]
@@ -154,6 +154,44 @@ async def _renewal_loop(
                 logger.exception(
                     "renewal subscribe raised for channel %s", channel_id
                 )
+
+
+def _filter_known_channels(
+    entries: list[VideoEntry], settings: Settings
+) -> list[VideoEntry]:
+    """Return only the entries whose channel is still in the configured list.
+
+    The hub keeps delivering a channel until its lease expires, which can be up
+    to five days after the channel is removed from the list. Dropping those
+    entries stops removed channels from being processed.
+
+    An empty resolved list means there is no channel config, so nothing is
+    filtered. If the list cannot be read or validated, the entries pass through
+    unfiltered and the error is logged. The hub must still get a 200, so this
+    function never raises.
+    """
+    try:
+        known = set(tldw_config.resolve_channel_ids(settings))
+    except Exception:
+        # Broad on purpose: a bad id raises ValueError, a bad file raises OSError
+        # or a JSON error, and a file with the wrong shape raises AttributeError
+        # or TypeError. None of them may turn into a 500 and a hub retry.
+        logger.exception("could not resolve channel ids; skipping channel filter")
+        return entries
+    if not known:
+        return entries
+    kept = [entry for entry in entries if entry.channel_id in known]
+    dropped = [entry for entry in entries if entry.channel_id not in known]
+    if dropped:
+        logger.info(
+            "filtered unknown channels from delivery: dropped=%d kept=%d "
+            "total=%d channel_ids=%s",
+            len(dropped),
+            len(kept),
+            len(entries),
+            ",".join(sorted({entry.channel_id for entry in dropped})),
+        )
+    return kept
 
 
 def create_app(
@@ -303,6 +341,11 @@ def create_app(
                     len(entries),
                 )
             entries = kept
+
+        # A removed channel keeps arriving until the hub lease expires, which can
+        # take up to five days. Drop entries from channels that are no longer in
+        # the configured list so they are not processed.
+        entries = _filter_known_channels(entries, settings)
 
         store = getattr(app.state, "queue", None)
         for entry in entries:

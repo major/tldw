@@ -157,6 +157,8 @@ def make_takeaways(
     summary_template: str | None = "Summary {i}",
     bullet_text: str | None = "Bullet {i}-{n}",
     bullet_times: list[list[int | None]] | None = None,
+    bottom_line: str = "Bottom line",
+    watch: tuple[str, ...] = (),
 ) -> Takeaways:
     """Build a valid ``Takeaways`` model for tests.
 
@@ -198,7 +200,9 @@ def make_takeaways(
         if summary_template is not None:
             item["summary"] = summary_template.format(i=i)
         items.append(item)
-    return Takeaways.model_validate({"items": items})
+    return Takeaways.model_validate(
+        {"bottom_line": bottom_line, "watch": list(watch), "items": items}
+    )
 
 
 def read_queue_row(path: Path, video_id: str) -> sqlite3.Row:

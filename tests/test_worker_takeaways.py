@@ -35,6 +35,10 @@ from tldw.queue import QueueRecord, QueueStore
 from tldw.worker import _process_record_audio
 
 _VIDEO_ID = "dQw4w9WgXcQ"
+# make_video_entry defaults to this title and channel, so the header assertion
+# checks that the worker passes record.title through to the builder.
+_VIDEO_TITLE = f"Test {_VIDEO_ID}"
+_CHANNEL = "Test Channel"
 
 
 def _write_txt(tmp_path: Path, video_id: str) -> Path:
@@ -181,7 +185,9 @@ async def test_llm_success_sends_embeds_and_marks_done(
     embeds_sender = CountingSendEmbeds()
     analyzer = FakeAnalyze(
         result=make_takeaways(
-            bullet_text="Bullet {i}", bullet_times=[[0], [30], [60]]
+            bullet_text="Bullet {i}",
+            bullet_times=[[0], [30], [60]],
+            bottom_line="Stocks rally",
         )
     )
 
@@ -199,7 +205,10 @@ async def test_llm_success_sends_embeds_and_marks_done(
     # Assert
     assert analyzer.calls == 1
     assert embeds_sender.calls == 1
-    assert len(embeds_sender.embeds[0]) == 3
+    embeds = embeds_sender.embeds[0]
+    assert len(embeds) == 4
+    assert embeds[0]["title"] == f"{_CHANNEL}: {_VIDEO_TITLE}"
+    assert "**Bottom line:** Stocks rally" in embeds[0]["description"]
     assert sender.calls == 0
     row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
     assert row["terminal_state"] == "DONE"
@@ -419,6 +428,8 @@ async def test_takeaways_without_timestamps_render_plain(
     # Assert
     assert analyzer.calls == 1
     assert embeds_sender.calls == 1
-    descriptions = [embed["description"] for embed in embeds_sender.embeds[0]]
+    takeaway_embeds = embeds_sender.embeds[0][1:]
+    descriptions = [embed["description"] for embed in takeaway_embeds]
+    assert len(descriptions) == 3
     assert all("youtu.be" not in description for description in descriptions)
     assert all("- Bullet" in description for description in descriptions)

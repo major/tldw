@@ -758,6 +758,7 @@ async def _llm_and_send_stage(
                 takeaways,
                 video_id=record.video_id,
                 video_url=record.url,
+                video_title=record.title,
                 channel_name=record.channel_name,
             )
             logger.info(

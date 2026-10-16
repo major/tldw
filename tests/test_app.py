@@ -1366,3 +1366,195 @@ def test_notify_real_payload_drops_shorts_by_default(
         assert store.counts() == {"pending": 11}
     finally:
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# Channel allowlist: notify drops deliveries from channels that were removed.
+#
+# The hub keeps delivering a channel until its lease expires, which can be up
+# to five days after removal. With a channel list configured, entries whose
+# channel is not in the list are dropped. With no list, nothing is dropped.
+# ---------------------------------------------------------------------------
+
+_REMOVED_CHANNEL = "UC_REMOVEDFIXTURE0000001"
+
+
+def _delivery_payload(entries: list[tuple[str, str]]) -> bytes:
+    """Return an Atom feed with one entry per ``(video_id, channel_id)`` pair.
+
+    Each title is ``Title <video_id>`` so tests can find it in stdout or in the
+    queue database.
+    """
+    items = "".join(
+        "<entry>"
+        f"<yt:videoId>{video_id}</yt:videoId>"
+        f"<yt:channelId>{channel_id}</yt:channelId>"
+        f"<title>Title {video_id}</title>"
+        f'<link rel="alternate" href="https://www.youtube.com/watch?v={video_id}"/>'
+        "<author><name>Fixture Channel</name></author>"
+        "</entry>"
+        for video_id, channel_id in entries
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
+        f"{items}</feed>"
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize("channel_id", [_CHANNEL_1, _CHANNEL_2])
+def test_notify_enqueues_delivery_from_configured_channel(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    channel_id: str,
+) -> None:
+    """A delivery from any channel in the configured list is enqueued and printed."""
+    # Arrange
+    channels_file = make_channels_file(tmp_path, [_CHANNEL_1, _CHANNEL_2])
+    # No callback URL: startup skips the hub subscribe so no network call is made.
+    settings = make_settings(
+        tmp_path, channel_ids_file=channels_file, callback_url=None
+    )
+    app = create_app(settings)
+    payload = _delivery_payload([("v_Configured01", channel_id)])
+
+    # Act
+    with TestClient(app) as client:
+        response = client.post("/pubsub/callback", content=payload)
+
+    # Assert
+    assert response.status_code == 200
+    assert "Title v_Configured01" in capsys.readouterr().out
+    assert read_titles(settings.queue_file) == {"Title v_Configured01"}
+
+
+def test_notify_drops_delivery_from_removed_channel(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A delivery from a channel no longer in the list is dropped and logged at INFO."""
+    # Arrange
+    channels_file = make_channels_file(tmp_path, [_CHANNEL_1])
+    # No callback URL: startup skips the hub subscribe so no network call is made.
+    settings = make_settings(
+        tmp_path, channel_ids_file=channels_file, callback_url=None
+    )
+    app = create_app(settings)
+    payload = _delivery_payload(
+        [("v_Kept000001", _CHANNEL_1), ("v_Gone000001", _REMOVED_CHANNEL)]
+    )
+
+    # Act
+    with TestClient(app) as client, caplog.at_level(logging.INFO):
+        response = client.post("/pubsub/callback", content=payload)
+
+    # Assert
+    assert response.status_code == 200
+    assert "Title v_Gone000001" not in capsys.readouterr().out
+    assert read_titles(settings.queue_file) == {"Title v_Kept000001"}
+    filter_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "filtered unknown channels" in record.getMessage()
+    ]
+    assert filter_messages == [
+        "filtered unknown channels from delivery: dropped=1 kept=1 total=2 "
+        f"channel_ids={_REMOVED_CHANNEL}"
+    ]
+
+
+@pytest.mark.parametrize(
+    "channel_ids",
+    [
+        pytest.param(None, id="missing-file"),
+        pytest.param([], id="empty-file"),
+    ],
+)
+def test_notify_without_channel_config_enqueues_every_entry(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    channel_ids: list[str] | None,
+) -> None:
+    """With no channel list configured, every delivered entry is still enqueued."""
+    # Arrange
+    if channel_ids is None:
+        channels_file = tmp_path / "missing.json"
+    else:
+        channels_file = make_channels_file(tmp_path, channel_ids)
+    settings = make_settings(tmp_path, channel_ids_file=channels_file)
+    app = create_app(settings)
+    payload = _delivery_payload(
+        [("v_Any0000001", _CHANNEL_1), ("v_Any0000002", _REMOVED_CHANNEL)]
+    )
+
+    # Act
+    with TestClient(app) as client, caplog.at_level(logging.INFO):
+        response = client.post("/pubsub/callback", content=payload)
+
+    # Assert
+    assert response.status_code == 200
+    out = capsys.readouterr().out
+    assert "Title v_Any0000001" in out
+    assert "Title v_Any0000002" in out
+    assert read_titles(settings.queue_file) == {
+        "Title v_Any0000001",
+        "Title v_Any0000002",
+    }
+    assert not any(
+        "filtered unknown channels" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    "file_text",
+    [
+        pytest.param('{"channel_ids": ["not-a-channel-id"]}', id="invalid-id"),
+        pytest.param("{not json", id="malformed-json"),
+        pytest.param('["UC_REMOVEDFIXTURE0000001"]', id="wrong-shape"),
+    ],
+)
+def test_notify_unreadable_channel_config_delivers_unfiltered_and_returns_200(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    file_text: str,
+) -> None:
+    """A channel file that cannot be resolved logs an error and still delivers everything."""
+    # Arrange
+    channels_file = tmp_path / "channels.json"
+    channels_file.write_text(file_text, encoding="utf-8")
+    settings = make_settings(tmp_path, channel_ids_file=channels_file)
+    app = create_app(settings)
+    # The lifespan resolves channels at startup and would refuse to start on a
+    # bad file, so skip it and attach a store by hand. This exercises the
+    # runtime guard in notify, which re-reads the file on every delivery.
+    store = open_store(settings.queue_file)
+    app.state.queue = store
+    payload = _delivery_payload(
+        [("v_Bad0000001", _CHANNEL_1), ("v_Bad0000002", _REMOVED_CHANNEL)]
+    )
+
+    # Act
+    client = TestClient(app)
+    with caplog.at_level(logging.ERROR):
+        response = client.post("/pubsub/callback", content=payload)
+    store.close()
+
+    # Assert
+    assert response.status_code == 200
+    out = capsys.readouterr().out
+    assert "Title v_Bad0000001" in out
+    assert "Title v_Bad0000002" in out
+    assert read_titles(settings.queue_file) == {
+        "Title v_Bad0000001",
+        "Title v_Bad0000002",
+    }
+    assert any(
+        record.levelno == logging.ERROR
+        and "could not resolve channel ids" in record.getMessage()
+        for record in caplog.records
+    )

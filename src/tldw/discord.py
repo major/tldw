@@ -255,7 +255,6 @@ def build_takeaway_embed(
     takeaway: Takeaway,
     *,
     video_id: str,
-    video_url: str,
     index: int,
     color: int = 0x5865F2,
 ) -> dict[str, Any]:
@@ -266,12 +265,16 @@ def build_takeaway_embed(
     256 chars and descriptions at 4096 chars, and longer text is cut with an
     ellipsis. This builder sets no footer; ``build_takeaway_embeds`` puts the
     channel name on the last embed only.
+
+    The embed has no ``url`` on purpose. Discord merges embeds in one message
+    that share a ``url`` (that is how image galleries work) and keeps only the
+    first embed's text, so a shared video url hid every takeaway behind the
+    header. Only the header embed links to the video.
     """
     bullets_md = "\n".join(_format_bullet(b, video_id) for b in takeaway.bullets)
     description = f"{takeaway.summary}\n\n{bullets_md}" if bullets_md else takeaway.summary
     return {
         "title": _truncate(f"{index}. {takeaway.title}", _EMBED_TITLE_MAX_CHARS),
-        "url": video_url,
         "description": _truncate(description, _EMBED_DESCRIPTION_MAX_CHARS),
         "color": color,
     }
@@ -296,7 +299,6 @@ def _assemble_embeds(
     items: Sequence[Takeaway],
     *,
     video_id: str,
-    video_url: str,
     channel_name: str,
 ) -> list[dict[str, Any]]:
     """Return the header followed by one embed per takeaway, footer on the last.
@@ -306,7 +308,7 @@ def _assemble_embeds(
     """
     embeds = [header]
     embeds.extend(
-        build_takeaway_embed(item, video_id=video_id, video_url=video_url, index=i + 1)
+        build_takeaway_embed(item, video_id=video_id, index=i + 1)
         for i, item in enumerate(items)
     )
     embeds[-1]["footer"] = {"text": channel_name}
@@ -370,7 +372,6 @@ def build_takeaway_embeds(
         header,
         items,
         video_id=video_id,
-        video_url=video_url,
         channel_name=channel_name,
     )
     original_chars = _message_chars(embeds)
@@ -388,7 +389,6 @@ def build_takeaway_embeds(
             header,
             items,
             video_id=video_id,
-            video_url=video_url,
             channel_name=channel_name,
         )
 

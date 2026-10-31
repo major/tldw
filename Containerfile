@@ -4,7 +4,7 @@
 # headers, and the toolchain (gcc, make, etc.) needed to compile the project's
 # wheels. That makes it suitable for both the builder stage below and the
 # runtime stage at the bottom of this file.
-FROM python:3.15@sha256:2e13bb9164213e8dec5adf78bc63bb710054c4b656800e29a25f756ed2fa18ae AS builder
+FROM python:3.15@sha256:c6ecb2f3c3dc85a75350f36560e1f49d35d6a9f7ce11fd775bd6834a69a9a0e1 AS builder
 
 ENV PATH="/tmp/.local/bin:${PATH}"
 
@@ -34,7 +34,7 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 # Same official image for the runtime stage. Using the full Debian variant
 # keeps the system libraries yt-dlp reaches into (libsqlite3, libssl, etc.)
 # present, and gives us apt-get for installing ffmpeg below.
-FROM python:3.15@sha256:2e13bb9164213e8dec5adf78bc63bb710054c4b656800e29a25f756ed2fa18ae
+FROM python:3.15@sha256:c6ecb2f3c3dc85a75350f36560e1f49d35d6a9f7ce11fd775bd6834a69a9a0e1
 
 ARG GIT_SHA=unknown
 ARG BUILD_TIME=unknown

@@ -8,8 +8,10 @@ the renewal loop, so the CLI only has to get uvicorn running.
 
 from __future__ import annotations
 
+import json
 import logging
-import time
+import sys
+from datetime import UTC, datetime
 from typing import Any
 
 import uvicorn
@@ -36,77 +38,81 @@ _PROBE_PATH = "/version"
 # a hypothetical '/versions' endpoint.
 _PROBE_MARKER = f"{_PROBE_PATH} HTTP/"
 
-# Log line format shared by tldw and uvicorn output. ``asctime`` is rendered
-# as ISO 8601 in UTC by ``_UtcFormatter`` below. Keeping the format identical
-# for both streams means ``kubectl logs`` and any downstream log shipper see
-# a single line shape regardless of which component emitted the line.
-_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
-_LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S+00:00"
+# Exclude built-in fields, including ones another handler may have populated,
+# so only log-call extras are promoted to top-level JSON fields.
+_STANDARD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
 
-class _UtcFormatter(logging.Formatter):
-    """Render ``asctime`` in UTC so log lines agree across machines and zones.
+class _JSONFormatter(logging.Formatter):
+    """Render stocknews-compatible JSON lines that ``hl -F`` can read."""
 
-    Python's default ``Formatter.formatTime`` uses ``time.localtime``, which
-    produces host-local timestamps. Container logs from a pod running in a
-    different zone than the operator would otherwise disagree on the wall
-    clock, so we pin the converter to ``time.gmtime`` and use a literal
-    ``+00:00`` in the date format. Operators who want a different zone can
-    replace the converter without touching the format string.
-    """
-
-    converter = time.gmtime
+    def format(self, record: logging.LogRecord) -> str:
+        """Keep extras structured and escape multiline messages and errors."""
+        fields: dict[str, Any] = {
+            "time": datetime.fromtimestamp(record.created, UTC).isoformat(
+                timespec="milliseconds"
+            ),
+            "level": record.levelname,
+            "msg": record.getMessage(),
+            "logger": record.name,
+        }
+        fields.update(
+            {
+                key: value
+                for key, value in record.__dict__.items()
+                if key not in _STANDARD_FIELDS
+                and key not in fields
+                and not key.startswith("_")
+            }
+        )
+        if record.exc_info:
+            fields["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            fields["stack_info"] = self.formatStack(record.stack_info)
+        return json.dumps(fields, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
 def _configure_root_logging() -> None:
-    """Install a UTC-timestamped stream handler on the root logger.
+    """Install an INFO-level JSON stdout handler on the root logger.
 
     Every ``logging.getLogger(__name__)`` in the project propagates to the
     root, so this is the single point where the on-disk log line shape is
     defined. The function is idempotent: if a handler whose formatter is
-    already ``_UtcFormatter`` is attached, the call is a no-op. Pre-existing
+    already ``_JSONFormatter`` is attached, the call is a no-op. Pre-existing
     handlers (for example pytest's ``LogCaptureHandler`` during the test
     suite) are left in place so log capture keeps working.
     """
     root = logging.getLogger()
     for existing in root.handlers:
-        if isinstance(existing.formatter, _UtcFormatter):
+        if isinstance(existing.formatter, _JSONFormatter):
             return
-    handler = logging.StreamHandler()
-    handler.setFormatter(_UtcFormatter(fmt=_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_JSONFormatter())
     root.addHandler(handler)
-    # ``NOTSET`` is the sentinel for "fall through to whatever the parent
-    # chain says". If a real level has already been set (for example by a
-    # deployment that wired in a quieter default), leave it alone.
-    if root.level == logging.NOTSET:
-        root.setLevel(logging.INFO)
+    # A fresh root logger defaults to WARNING, which would hide application
+    # startup and worker INFO messages even while Uvicorn emits its own.
+    root.setLevel(logging.INFO)
 
 
-# Uvicorn's default ``log_config`` renders the log line without a timestamp
-# and uses formatters that strip ``asctime`` even when it is in the format
-# string. Passing our own config gives every uvicorn logger the same UTC
-# line shape the rest of the app uses, and pins the access log to stdout
-# so ``kubectl logs`` can split error and access streams by convention.
+# Use the same JSON format and stdout stream for Uvicorn and application logs.
+# Explicit handlers prevent Uvicorn records from propagating to the root and
+# appearing twice.
 _LOG_CONFIG: dict[str, Any] = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "default": {
-            "()": _UtcFormatter,
-            "fmt": _LOG_FORMAT,
-            "datefmt": _LOG_DATEFMT,
+            "()": _JSONFormatter,
         },
         "access": {
-            "()": _UtcFormatter,
-            "fmt": _LOG_FORMAT,
-            "datefmt": _LOG_DATEFMT,
+            "()": _JSONFormatter,
         },
     },
     "handlers": {
         "default": {
             "formatter": "default",
             "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
+            "stream": "ext://sys.stdout",
         },
         "access": {
             "formatter": "access",
@@ -162,7 +168,7 @@ def main() -> None:
     are issued, so a warning names the variable an operator must set.
     """
     # Configure logging first so the banner and the callback warning land
-    # on a stream that already has a timestamp. The same config is passed
+    # on a stream that already uses JSON. The same config is passed
     # to uvicorn below so its loggers render the same way.
     _configure_root_logging()
     # Emit the build identity before anything else so a slow startup (such as

@@ -123,6 +123,18 @@ uv run python -m tldw
 
 On startup `tldw` prints one log line per channel it subscribes to. On shutdown the lifespan cancels the renewal task and closes the shared HTTP client. :arrows_counterclockwise:
 
+### Human-readable logs :mag:
+
+Application and Uvicorn logs use one JSON object per line on stdout, with
+`time` (UTC), `level`, `msg`, and `logger` fields. Log-call extras appear as
+top-level fields, and tracebacks stay inside the JSON record. Use `hl -F`
+to format the logs for reading:
+
+```bash
+uv run tldw | hl -F
+tail -f tldw.log | hl -F
+```
+
 ## Run with container :whale:
 
 A multi-stage `Containerfile` and `compose.yml` ship with the repo. They pin
@@ -137,8 +149,8 @@ variant), install the locked runtime dependencies plus `ffmpeg` for
 make container-build
 make container-up
 
-# Tail logs
-podman logs -f tldw
+# Tail human-readable logs
+podman logs -f tldw | hl -F
 
 # Stop the container
 make container-down

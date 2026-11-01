@@ -1,11 +1,8 @@
 """Tests for the logging configuration in tldw.cli.
 
-The CLI owns the shape of every log line the process writes. It installs one
-UTC-timestamped handler on the root logger and hands uvicorn a ``log_config``
-whose formatters use the same class, so ``kubectl logs`` sees one timestamp
-format no matter which component emitted the line. These tests drive the real
-formatter and the real configuration dict instead of mocking them, and they
-pin the exact format and date strings so drift breaks loudly.
+The CLI installs a JSON handler on the root logger and hands uvicorn a
+``log_config`` with the same formatter, so ``hl -F`` can read both streams.
+These tests drive the real formatter and configuration instead of mocking them.
 
 Tests that call ``_configure_root_logging`` mutate the root logger, which
 pytest itself has already populated. The autouse ``_restore_root_logger``
@@ -15,8 +12,12 @@ back afterwards so the module cannot pollute the rest of the suite.
 
 from __future__ import annotations
 
+import json
 import logging
+import sys
 from collections.abc import Iterator
+from io import StringIO
+from pathlib import Path
 
 import pytest
 
@@ -28,10 +29,8 @@ from tldw import cli
 def _restore_root_logger() -> Iterator[None]:
     """Snapshot and restore the root logger around every test in this module.
 
-    pytest pre-populates the root logger with capture handlers and a WARNING
-    level. ``_configure_root_logging`` clears those handlers, so tests here
-    must put the originals back or later tests in the suite lose their capture
-    plumbing.
+    ``_configure_root_logging`` preserves pytest's capture handlers but adds
+    its own handler and sets the level. Restore both after each test.
     """
     root = logging.getLogger()
     saved_handlers = list(root.handlers)
@@ -46,58 +45,136 @@ def _restore_root_logger() -> Iterator[None]:
         root.setLevel(saved_level)
 
 
-def test_utc_formatter_renders_iso_timestamp_in_utc() -> None:
-    """_UtcFormatter renders asctime as ISO 8601 UTC from the fixed epoch."""
+@pytest.mark.parametrize(
+    ("name", "message", "args", "expected"),
+    [
+        ("tldw.worker", "hello %s", ("world",), "hello world"),
+        ("uvicorn.error", "ready ✅\nnext line", None, "ready ✅\nnext line"),
+        (
+            "uvicorn.access",
+            '%s - "%s %s HTTP/%s" %d',
+            ("127.0.0.1:1234", "POST", "/pubsub/callback", "1.1", 200),
+            '127.0.0.1:1234 - "POST /pubsub/callback HTTP/1.1" 200',
+        ),
+    ],
+)
+def test_json_formatter_renders_one_line(
+    name: str, message: str, args: tuple[object, ...] | None, expected: str
+) -> None:
+    """Application and Uvicorn records share the stocknews JSON fields."""
     # Arrange
-    formatter = cli._UtcFormatter(fmt=cli._LOG_FORMAT, datefmt=cli._LOG_DATEFMT)
-    record = make_log_record("hello %s", args=("world",))
+    formatter = cli._JSONFormatter()
+    record = make_log_record(message, name=name, args=args)
 
     # Act
     line = formatter.format(record)
 
     # Assert
-    assert line.startswith("2025-01-01T00:00:00+00:00 ")
-    assert " INFO " in line
-    assert record.name in line
-    assert "hello world" in line
+    assert len(line.splitlines()) == 1
+    assert json.loads(line) == {
+        "time": "2025-01-01T00:00:00.000+00:00",
+        "level": "INFO",
+        "msg": expected,
+        "logger": name,
+    }
 
 
-def test_configure_root_logging_adds_utc_handler() -> None:
-    """The function appends a UTC stream handler and keeps pre-existing ones."""
+def test_json_formatter_includes_extras_without_overwriting_core_fields() -> None:
+    """Extras stay structured and fields from earlier formatters stay hidden."""
+    # Arrange
+    record = make_log_record("queued")
+    record.__dict__.update(
+        video_id="abc123",
+        context={"attempt": 2},
+        path=Path("transcripts/video.txt"),
+        _private="hidden",
+        time="wrong",
+        level="wrong",
+        logger="wrong",
+    )
+    logging.Formatter("%(asctime)s %(message)s").format(record)
+
+    # Act
+    fields = json.loads(cli._JSONFormatter().format(record))
+
+    # Assert
+    assert fields == {
+        "time": "2025-01-01T00:00:00.000+00:00",
+        "level": "INFO",
+        "msg": "queued",
+        "logger": "tldw.cli",
+        "video_id": "abc123",
+        "context": {"attempt": 2},
+        "path": "transcripts/video.txt",
+    }
+
+
+def test_json_formatter_keeps_exception_and_stack_on_one_output_line() -> None:
+    """Tracebacks and stack information are JSON strings, not extra log lines."""
+    # Arrange
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(cli._JSONFormatter())
+    record = make_log_record("failed\nretry later", level=logging.ERROR)
+    try:
+        raise ValueError("bad input\ntry again")
+    except ValueError:
+        record.exc_info = sys.exc_info()
+    record.stack_info = "Stack (most recent call last):\n  caller"
+
+    # Act
+    handler.handle(record)
+
+    # Assert
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 1
+    fields = json.loads(lines[0])
+    assert fields["msg"] == "failed\nretry later"
+    assert fields["level"] == "ERROR"
+    assert "Traceback (most recent call last):" in fields["exception"]
+    assert "ValueError: bad input\ntry again" in fields["exception"]
+    assert fields["stack_info"] == record.stack_info
+
+
+def test_configure_root_logging_adds_json_stdout_handler(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep existing handlers and emit application INFO logs as JSON to stdout."""
     # Arrange
     root = logging.getLogger()
     sentinel = logging.NullHandler()
     root.addHandler(sentinel)
+    root.setLevel(logging.WARNING)
     starting = len(root.handlers)
 
     # Act
     cli._configure_root_logging()
+    logging.getLogger("tldw.worker").info("queued %s", "abc123")
 
     # Assert
     assert len(root.handlers) == starting + 1
-    utc_handlers = [
-        h for h in root.handlers if isinstance(h.formatter, cli._UtcFormatter)
+    json_handlers = [
+        h for h in root.handlers if isinstance(h.formatter, cli._JSONFormatter)
     ]
-    assert len(utc_handlers) == 1
+    assert len(json_handlers) == 1
     # Pre-existing handlers are not removed, so test capture plumbing (e.g.
     # pytest's LogCaptureHandler) keeps working.
     assert sentinel in root.handlers
-    handler = utc_handlers[0]
+    handler = json_handlers[0]
     assert isinstance(handler, logging.StreamHandler)
-    # Narrow away the ``Formatter | None`` union so the next assertions are
-    # type-safe. ``setFormatter`` was called with a real formatter above.
-    assert isinstance(handler.formatter, cli._UtcFormatter)
-    # Compare the raw strings, not the class, so a changed format fails here.
-    assert handler.formatter._fmt == cli._LOG_FORMAT
-    assert handler.formatter.datefmt == cli._LOG_DATEFMT
+    assert handler.stream is sys.stdout
+    output = capsys.readouterr()
+    assert output.err == ""
+    fields = json.loads(output.out)
+    assert fields["level"] == "INFO"
+    assert fields["logger"] == "tldw.worker"
+    assert fields["msg"] == "queued abc123"
 
 
 def test_configure_root_logging_is_idempotent() -> None:
-    """Calling the function twice leaves exactly one UTC handler on the root."""
+    """Calling the function twice leaves exactly one JSON handler on the root."""
     # Arrange
     root = logging.getLogger()
-    # pytest leaves the root at WARNING, but the function only promotes the
-    # NOTSET sentinel, so reset it to model a fresh interpreter.
     root.setLevel(logging.NOTSET)
 
     # Act
@@ -105,26 +182,28 @@ def test_configure_root_logging_is_idempotent() -> None:
     cli._configure_root_logging()
 
     # Assert
-    utc_handlers = [
-        h for h in root.handlers if isinstance(h.formatter, cli._UtcFormatter)
+    json_handlers = [
+        h for h in root.handlers if isinstance(h.formatter, cli._JSONFormatter)
     ]
-    assert len(utc_handlers) == 1
+    assert len(json_handlers) == 1
     assert root.level == logging.INFO
 
 
-def test_log_config_uses_utc_formatter_for_default_and_access() -> None:
-    """The uvicorn log_config points both formatters at _UtcFormatter."""
+def test_log_config_uses_json_stdout_for_default_and_access() -> None:
+    """Uvicorn uses the same JSON formatter and stdout without duplicates."""
     # Arrange
     formatters = cli._LOG_CONFIG["formatters"]
+    handlers = cli._LOG_CONFIG["handlers"]
     loggers = cli._LOG_CONFIG["loggers"]
 
     # Act
     # Assert
     for name in ("default", "access"):
         formatter = formatters[name]
-        assert formatter["()"] is cli._UtcFormatter
-        assert "asctime" in formatter["fmt"]
-        assert "+00:00" in formatter["datefmt"]
+        assert formatter["()"] is cli._JSONFormatter
+        assert handlers[name]["formatter"] == name
+        assert handlers[name]["class"] == "logging.StreamHandler"
+        assert handlers[name]["stream"] == "ext://sys.stdout"
     # propagate False stops uvicorn records from also hitting the root handler,
     # which is what lets the access formatter own the access line shape.
     assert loggers["uvicorn"]["propagate"] is False

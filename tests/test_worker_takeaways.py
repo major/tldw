@@ -25,7 +25,6 @@ from helpers import (
     make_settings,
     make_takeaways,
     make_video_entry,
-    noop_sleep,
     read_queue_row,
 )
 from tldw.audio import DownloadResult
@@ -159,7 +158,6 @@ async def _run(
         analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        sleep=noop_sleep,
         now=now,
     )
 

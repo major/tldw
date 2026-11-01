@@ -19,7 +19,6 @@ from typing import Any
 
 import httpx2
 import pytest
-from fastapi import FastAPI
 
 from helpers import (
     counting_sleep,
@@ -49,14 +48,6 @@ _VIDEO_ID = "dQw4w9WgXcQ"
 # ---------------------------------------------------------------------------
 # Fixtures and builders
 # ---------------------------------------------------------------------------
-
-
-def _make_app(settings: Settings, queue_store: QueueStore) -> FastAPI:
-    """Build a minimal app carrying the two state attributes the loop reads."""
-    app = FastAPI()
-    app.state.settings = settings
-    app.state.queue = queue_store
-    return app
 
 
 def _fetch(queue_store: QueueStore, now: float) -> QueueRecord:
@@ -1013,7 +1004,6 @@ async def test_transcript_loop_requires_configuration(
         audio_dir=tmp_path / "audio",
         openai_api_key=openai_api_key,
     )
-    app = _make_app(settings, queue_store)
     _enqueue(queue_store, time.time() - 1)
 
     async def fake_audio(*args: object, **kwargs: object) -> None:
@@ -1026,7 +1016,7 @@ async def test_transcript_loop_requires_configuration(
     # never_sleep raises if the loop reaches a sleep, so a clean return proves
     # the guard fired before the loop started.
     async with httpx2.AsyncClient() as client:
-        await transcript_loop(app, client, sleep=never_sleep)
+        await transcript_loop(settings, queue_store, client, sleep=never_sleep)
 
     # Assert
     assert not (tmp_path / "audio").exists()
@@ -1047,7 +1037,6 @@ async def test_transcript_loop_uses_real_compression(
         audio_bitrate="24k",
         ffmpeg_timeout_seconds=123,
     )
-    app = _make_app(settings, queue_store)
     _enqueue(queue_store, time.time() - 1)
     raw = _ready_raw(tmp_path)
     compressed = settings.audio_dir / f"{_VIDEO_ID}.compressed.webm"
@@ -1068,7 +1057,7 @@ async def test_transcript_loop_uses_real_compression(
     async with httpx2.AsyncClient() as client:
         with pytest.raises(asyncio.CancelledError):
             await transcript_loop(
-                app, client, download_audio=download,
+                settings, queue_store, client, download_audio=download,
                 transcribe=FakeTranscribe(transcripts=["hello world"]),
                 analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
                 send=CountingSend(), send_embeds=embeds,
@@ -1104,7 +1093,6 @@ async def test_transcript_loop_respects_enqueue_delay(
         audio_dir=tmp_path / "audio",
         openai_api_key="sk-test",
     )
-    app = _make_app(settings, queue_store)
     now = time.time()
     queue_store.enqueue(make_video_entry("v1"), now=now, delay_seconds=300.0)
     download = FakeDownload(
@@ -1115,7 +1103,8 @@ async def test_transcript_loop_respects_enqueue_delay(
     # Act
     with pytest.raises(asyncio.CancelledError):
         await transcript_loop(
-            app,
+            settings,
+            queue_store,
             httpx2.AsyncClient(),
             sleep=counting_sleep(delays, cancel_after=1),
             download_audio=download,

@@ -38,7 +38,6 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx2
-from fastapi import FastAPI
 from pydantic import ValidationError
 
 # Lazy imports (PEP 810): ``openai`` exception classes and
@@ -148,7 +147,8 @@ def _default_transcribe_factory(settings: Settings) -> TranscribeFn:
 
 
 async def transcript_loop(
-    app: FastAPI,
+    settings: Settings,
+    store: QueueStore,
     client: httpx2.AsyncClient,
     *,
     sleep: SleepFn = asyncio.sleep,
@@ -172,7 +172,6 @@ async def transcript_loop(
     ``compress_audio`` are resolved once from settings when not injected, so the
     seams can be faked in tests without touching the network or the filesystem.
     """
-    settings: Settings = app.state.settings
     if not settings.discord_webhook_url:
         logger.info("transcript worker skipping: TLDW_DISCORD_WEBHOOK_URL is not set")
         return
@@ -191,7 +190,7 @@ async def transcript_loop(
         compress_audio = _default_compress_audio()
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
     await _run_loop(
-        app,
+        store,
         client,
         settings,
         sleep=sleep,
@@ -205,7 +204,7 @@ async def transcript_loop(
 
 
 async def _run_loop(
-    app: FastAPI,
+    store: QueueStore,
     client: httpx2.AsyncClient,
     settings: Settings,
     *,
@@ -219,13 +218,12 @@ async def _run_loop(
 ) -> None:
     """Run the serial drain loop.
 
-    The store is resolved once from the app state. Each iteration pulls the
-    oldest due record and hands it to ``_process_record_audio`` with the shared
-    seams, then sleeps the per-record pacing. An empty queue sleeps the long
-    empty-queue interval. A per-record exception is logged and the loop moves
-    on, so one bad record can never kill the worker.
+    Each iteration pulls the oldest due record from the supplied store and hands
+    it to ``_process_record_audio`` with the shared seams, then sleeps the
+    per-record pacing. An empty queue sleeps the long empty-queue interval. A
+    per-record exception is logged and the loop moves on, so one bad record can
+    never kill the worker.
     """
-    store: QueueStore = app.state.queue
     next_alert_attempt_at = 0.0
 
     while True:

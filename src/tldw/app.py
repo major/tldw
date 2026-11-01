@@ -236,7 +236,7 @@ def create_app(
                 app.state.transcript_task = None
             else:
                 app.state.transcript_task = asyncio.create_task(
-                    tldw_worker.transcript_loop(app, client)
+                    tldw_worker.transcript_loop(settings, app.state.queue, client)
                 )
             try:
                 yield

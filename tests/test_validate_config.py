@@ -78,3 +78,59 @@ def test_blocked_disabled_backlog_is_safe(tmp_path: Path, monkeypatch: pytest.Mo
     error = capsys.readouterr().err
     assert "blocked" in error
     assert "secret-value" not in error
+
+
+@pytest.mark.parametrize("content", ['[]', '{"channel_ids": null}', '{"channel_ids": [123]}'])
+def test_malformed_legacy_file_exits_safely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    content: str,
+) -> None:
+    """Malformed legacy structures produce a controlled error without input values."""
+    from tldw.validate_config import main
+
+    # Arrange
+    path = tmp_path / "channels.json"
+    path.write_text(content)
+    monkeypatch.setenv("TLDW_CHANNELS_FILE", str(path))
+    monkeypatch.delenv("TLDW_TOPICS_FILE", raising=False)
+    monkeypatch.delenv("TLDW_CHANNEL_IDS", raising=False)
+    # Act and assert
+    with pytest.raises(SystemExit) as exc:
+        main([])
+    assert exc.value.code != 0
+    error = capsys.readouterr().err
+    assert "Configuration error" in error
+    assert "Traceback" not in error and "123" not in error
+
+
+@pytest.mark.parametrize("case", ["missing", "disabled", "wal"])
+def test_queue_topic_references_and_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """Check missing topics, disabled destinations, and WAL refusal without writes."""
+    from tldw.validate_config import main
+
+    # Arrange
+    path = tmp_path / "topics.yml"
+    path.write_text(
+        "version: 1\ntopics:\n  default:\n    enabled: false\n    channels: []\n"
+        "    prompt: {builtin: trading}\n    discord: {webhook_env: WEBHOOK}\n"
+    )
+    database = tmp_path / "queue.sqlite"
+    with sqlite3.connect(database) as db:
+        db.execute("CREATE TABLE videos (video_id TEXT, terminal_state TEXT, topic_id TEXT)")
+        db.execute("INSERT INTO videos VALUES ('one', NULL, ?)",
+                   ("absent" if case == "missing" else "default",))
+    if case == "wal":
+        (tmp_path / "queue.sqlite-wal").write_bytes(b"sentinel")
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    monkeypatch.setenv("TLDW_TOPICS_FILE", str(path))
+    monkeypatch.setenv("WEBHOOK", "secret-value")
+    monkeypatch.delenv("TLDW_CHANNEL_IDS", raising=False)
+    # Act and assert
+    if case == "disabled":
+        main(["--queue-file", str(database)])
+    else:
+        with pytest.raises(SystemExit):
+            main(["--queue-file", str(database)])
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before

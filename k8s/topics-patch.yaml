@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tldw
+spec:
+  template:
+    spec:
+      containers:
+        - name: tldw
+          env:
+            - name: TLDW_TOPICS_FILE
+              value: /etc/tldw/topics.yaml
+            - name: TLDW_DISCORD_WEBHOOK_URL
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: tldw-discord
+                  key: default-webhook
+            - name: TLDW_LEGAL_DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: tldw-discord
+                  key: legal-webhook
+                  optional: true
+          volumeMounts:
+            - name: topic-config
+              mountPath: /etc/tldw
+              readOnly: true
+      volumes:
+        - name: topic-config
+          configMap:
+            name: tldw-topics
+            items:
+              - key: topics.yaml
+                path: topics.yaml
+              - key: legal.md
+                path: prompts/legal.md

@@ -14,6 +14,8 @@ WORKDIR /opt/app-root/src
 COPY --chown=0:0 pyproject.toml uv.lock .python-version README.md ./
 COPY --chown=0:0 src ./src
 COPY --chown=0:0 channels.json ./
+COPY --chown=0:0 topics.example.yaml ./
+COPY --chown=0:0 prompts ./prompts
 
 RUN python3 -m pip install --no-cache-dir uv==0.12.18 \
     && uv sync --locked --no-dev --no-editable --python python3.15
@@ -70,6 +72,8 @@ WORKDIR /opt/app-root/src
 # execute them without ever needing root.
 COPY --from=builder --chown=1000:1000 /opt/app-root/src/.venv /opt/app-root/src/.venv
 COPY --from=builder --chown=1000:1000 /opt/app-root/src/channels.json /opt/app-root/src/channels.json
+COPY --from=builder --chown=1000:1000 /opt/app-root/src/topics.example.yaml /opt/app-root/src/topics.example.yaml
+COPY --from=builder --chown=1000:1000 /opt/app-root/src/prompts /opt/app-root/src/prompts
 
 # Deno JavaScript runtime for yt-dlp (see the builder stage comment). Placed in
 # /usr/local/bin so it is on PATH for the non-root runtime user.

@@ -14,12 +14,14 @@ dependencies = [
     "pydantic-ai>=2.54",
     "openai>=3.19,<4",
     "pydantic-settings>=2.5,<3",
+    "pyyaml>=6,<7",
     "uvicorn>=0.30,<1",
     "yt-dlp[default]>=2026.8.19,<2027",
 ]
 
 [project.scripts]
 tldw = "tldw.cli:main"
+tldw-validate-config = "tldw.validate_config:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]

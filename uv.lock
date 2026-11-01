@@ -1753,6 +1753,7 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic-ai" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
     { name = "yt-dlp", extra = ["default"] },
 ]
@@ -1774,6 +1775,7 @@ requires-dist = [
     { name = "openai", specifier = ">=3.19,<4" },
     { name = "pydantic-ai", specifier = ">=2.54" },
     { name = "pydantic-settings", specifier = ">=2.5,<3" },
+    { name = "pyyaml", specifier = ">=6,<7" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
     { name = "yt-dlp", extras = ["default"], specifier = ">=2026.8.19,<2027" },
 ]

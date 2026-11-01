@@ -1,6 +1,7 @@
 """Tests for immutable topic configuration."""
 
 from pathlib import Path
+from typing import cast, MutableMapping
 
 import pytest
 
@@ -20,7 +21,7 @@ def test_load_topics_resolves_prompt_and_secret(tmp_path: Path) -> None:
     assert registry.channel_ids == ("UCabcdefghijklmnopqrstuv",)
     assert "secret-value" not in repr(registry)
     with pytest.raises(TypeError):
-        registry.topics["other"] = registry.topics["default"]
+        cast(MutableMapping, registry.topics)["other"] = registry.topics["default"]
 
 
 @pytest.mark.parametrize("text", [

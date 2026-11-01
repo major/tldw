@@ -103,6 +103,25 @@ def _user_prompt(messages: list[ModelMessage]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def test_llm_reexports_takeaway_contract() -> None:
+    """The old and new paths expose the same schema classes and constraints."""
+    # Arrange
+    import tldw.llm as llm
+    import tldw.takeaways as takeaways
+
+    classes = ("TakeawayBullet", "Takeaway", "Takeaways")
+    constraints = (
+        "TITLE_MAX_CHARS", "SUMMARY_MAX_CHARS", "BULLET_MAX_CHARS", "MAX_BULLETS",
+        "BOTTOM_LINE_MAX_CHARS", "WATCH_ITEM_MAX_CHARS", "MAX_WATCH_ITEMS",
+    )
+
+    # Act and assert
+    for name in classes:
+        assert getattr(llm, name) is getattr(takeaways, name)
+    for name in constraints:
+        assert getattr(llm, name) == getattr(takeaways, name)
+
+
 @pytest.mark.parametrize("count", [2, 4])
 def test_takeaways_rejects_two_or_four_items(count: int) -> None:
     """Takeaways requires exactly three items."""

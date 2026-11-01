@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
+import sys
+from pathlib import Path
+from textwrap import dedent
 
 import pytest
 from helpers import make_takeaways
@@ -35,6 +39,41 @@ _EMBED_TITLE = "Title {i}"
 _EMBED_SUMMARY = "Short summary"
 _TIMES_2: list[list[int | None]] = [[0, 15], [60, 75], [120, 135]]
 _TIMES_3: list[list[int | None]] = [[0, 15, 30], [60, 75, 90], [120, 135, 150]]
+
+
+def test_discord_import_keeps_llm_dependencies_lazy() -> None:
+    """Importing Discord does not load the LLM module or its dependencies."""
+    # Arrange: collection imports the LLM module, so use a clean interpreter.
+    source = Path(__file__).resolve().parents[1] / "src"
+    probe = dedent("""\
+        import sys
+        from pathlib import Path
+        import pytest_socket
+
+        pytest_socket.disable_socket()
+        source = Path(sys.argv[1])
+        sys.path.insert(0, str(source))
+        forbidden = ("tldw.llm", "openai", "pydantic_ai")
+
+        import tldw.discord
+        assert Path(tldw.discord.__file__).resolve() == source / "tldw" / "discord.py"
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in sys.modules for prefix in forbidden
+        ), "Discord import loaded LLM dependencies"
+        """)
+
+    # Act
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(source)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    # Assert
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _briefing(

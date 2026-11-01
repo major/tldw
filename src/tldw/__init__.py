@@ -5,6 +5,6 @@ PubSubHubbub subscriber for YouTube channels.
 
 from __future__ import annotations
 
-from tldw.cli import main
+lazy from tldw.cli import main
 
 __all__ = ["main"]

@@ -46,6 +46,8 @@ def _check_queue(path: Path, registry: TopicRegistry | None) -> int:
             references = [row[0] for row in db.execute(pending)]
     except sqlite3.Error:
         raise TopicConfigError("queue: cannot read requested database or schema") from None
+    if registry is None and any(topic_id != "default" for topic_id in references):
+        raise TopicConfigError("queue: nondefault backlog requires topic configuration")
     if registry is not None:
         for topic_id in references:
             if topic_id not in registry.topics:

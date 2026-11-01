@@ -1,0 +1,7 @@
+services:
+  tldw:
+    environment:
+      TLDW_TOPICS_FILE: /config/topics.yaml
+    volumes:
+      - ./topics.example.yaml:/config/topics.yaml:ro
+      - ./prompts:/config/prompts:ro

@@ -1,6 +1,6 @@
 # tldw
 
-**T**oo **L**ong; **D**idn't **W**atch. A tiny PubSubHubbub subscriber for YouTube channels. When one of your followed creators publishes a new video, the YouTube hub calls a local callback and `tldw` prints a one-line summary to your terminal. That is all `tldw` does today. Whatever you want to do with the notification, you add later. :bell: :tv:
+**T**oo **L**ong; **D**idn't **W**atch. A PubSubHubbub subscriber for YouTube channels that queues new videos, transcribes audio, and delivers summaries to Discord. :bell: :tv:
 
 ## Why :thinking:
 
@@ -43,8 +43,9 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_CALLBACK_URL` | Yes (for subscribes) | unset | Public URL the hub will POST notifications to |
 | `TLDW_CHANNELS_FILE` | No | `channels.json` | Path to the JSON channel list |
 | `TLDW_CHANNEL_IDS` | No | unset | CSV override for the channel list |
+| `TLDW_TOPICS_FILE` | No | unset | Opt in to topics YAML; conflicts with a nonempty channel CSV |
 | `TLDW_HUB_SECRET` | No | unset | HMAC secret for signing deliveries. When set, every incoming notification must carry a matching `X-Hub-Signature: sha1=...` header |
-| `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Webhook URL for transcript-to-Discord delivery. When unset, the transcript worker does not run; videos are enqueued but nothing is downloaded or sent |
+| `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Legacy Discord destination and default topic destination in the example; without a usable destination the worker does not run |
 | `TLDW_DISCORD_ALERT_USER_ID` | No | unset | Discord user snowflake (17 to 20 digits) to mention for video pipeline failures |
 | `TLDW_QUEUE_FILE` | No | `queue.sqlite3` | Path to the SQLite queue database. Persist this directory in container deployments |
 | `TLDW_TRANSCRIPT_DIR` | No | `transcripts` | Directory where the audio pipeline caches its `.txt` transcripts |
@@ -53,7 +54,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_POLL_CAP_SECONDS` | No | `3600` | Maximum retry delay in seconds |
 | `TLDW_GIVEUP_SECONDS` | No | `172800` | Stop retrying a video after this many seconds |
 | `TLDW_YTDLP_COOKIES_FILE` | No | unset | Optional path to a Netscape-format cookies file. Improves reliability when YouTube applies bot checks |
-| `TLDW_OPENAI_API_KEY` | No | unset | API key for the OpenAI API. When unset, the LLM takeaway step is skipped and the plain digest is sent |
+| `TLDW_OPENAI_API_KEY` | Yes (for worker) | unset | API key required for audio transcription; the worker exits without it |
 | `TLDW_OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible endpoint |
 | `TLDW_OPENAI_MODEL` | No | `gpt-6.1-sol` | Model name to request from the endpoint |
 | `TLDW_LLM_TIMEOUT_SECONDS` | No | `180.0` | Per-call timeout for a takeaway request |
@@ -72,9 +73,11 @@ Environment variables (all read from the `TLDW_` namespace):
 
 The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
 
+For opt-in topic routing and a safe migration, see [Topics YAML](docs/topics.md).
+
 ### What happens when no webhook is configured
 
-When `TLDW_DISCORD_WEBHOOK_URL` is unset, the lifespan does not start the transcript worker at all. Videos are still enqueued (so the hub is acknowledged and the queue is durable), but nothing is downloaded and nothing is sent. Set the webhook URL and restart the service to drain the backlog; the queue survives the restart because of the WAL SQLite store.
+In legacy mode, when `TLDW_DISCORD_WEBHOOK_URL` is unset, the lifespan does not start the transcript worker. Videos are still enqueued, but nothing is downloaded or sent. Configure the destination and restart to drain the persistent queue. In topic mode, enabled topics require destinations at startup. If no configured topic has a usable destination, the worker is skipped and existing queued work remains stored. When all topics are disabled, new notifications are dropped rather than queued.
 
 Set `TLDW_DISCORD_ALERT_USER_ID` to opt in to operational failure alerts in the same channel as summaries, using the same webhook. The SQLite queue persists the first failure per video and stage, including across restarts; existing terminal videos are not backfilled. Deduplication is not global, so a shared quota incident can alert for each affected video. Queued alerts show the failure time and the video's current status. Delivery is at least once, so a crash after Discord accepts an alert can rarely cause a duplicate. A Discord outage cannot be reported to Discord until it recovers. Startup configuration failures, including a missing API key, are not monitored by these alerts. Unset the ID to disable alert creation and delivery without disabling summaries.
 
@@ -112,7 +115,7 @@ YouTube session cookies expire, typically after a few weeks of inactivity. When 
 
 ### LLM video takeaways
 
-When `TLDW_OPENAI_API_KEY` is set, the worker sends the transcript through the OpenAI API and posts three Discord embeds instead of the plain digest. Each embed has a short title, a summary, and bullet points that link back to the exact moment in the video. The timestamps come from the `[m:ss]` anchors the worker adds to the rendered transcript. Unset the API key to disable takeaways and go back to the plain text digest.
+The API key is required for audio transcription; the worker exits without it. After transcription, the worker analyzes the transcript and posts a briefing header plus three takeaway embeds instead of the plain digest. Each takeaway has a short title, a summary, and bullet points that may link back to supported timestamps in the video.
 
 If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a download, so it does not consume the request budget. :robot:
 

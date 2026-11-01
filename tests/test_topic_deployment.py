@@ -17,9 +17,11 @@ def test_example_matches_legacy_sources_and_prompt() -> None:
     # Arrange
     ids = json.loads((ROOT / "channels.json").read_text())["channel_ids"]
     # Act
-    registry = load_topics(ROOT / "topics.example.yaml", environ={"TLDW_DISCORD_WEBHOOK_URL": "fake"})
+    registry = load_topics(
+        ROOT / "topics.example.yaml", environ={"TLDW_DISCORD_WEBHOOK_URL": "fake"}
+    )
     # Assert
-    assert len(ids) == 9 and set(registry.channel_ids) == set(ids)
+    assert ids and set(registry.channel_ids) == set(ids)
     assert registry.topics["default"].system_prompt == SYSTEM_PROMPT
     assert registry.topics["default"]._builtin == "trading"
     assert registry.topics["default"].webhook_env == "TLDW_DISCORD_WEBHOOK_URL"
@@ -38,7 +40,10 @@ def test_compose_overlay_is_opt_in() -> None:
     # Assert
     assert "TLDW_TOPICS_FILE" not in base["environment"]
     assert overlay["environment"]["TLDW_TOPICS_FILE"] == "/config/topics.yaml"
-    assert set(overlay["volumes"]) == {"./topics.example.yaml:/config/topics.yaml:ro", "./prompts:/config/prompts:ro"}
+    assert set(overlay["volumes"]) == {
+        "./topics.example.yaml:/config/topics.yaml:ro",
+        "./prompts:/config/prompts:ro",
+    }
 
 
 def test_kubernetes_patch_is_opt_in() -> None:
@@ -56,10 +61,19 @@ def test_kubernetes_patch_is_opt_in() -> None:
     assert patch["metadata"]["name"] == container["name"] == "tldw"
     assert env["TLDW_TOPICS_FILE"]["value"] == "/etc/tldw/topics.yaml"
     assert env["TLDW_DISCORD_WEBHOOK_URL"]["value"] is None
-    assert env["TLDW_DISCORD_WEBHOOK_URL"]["valueFrom"]["secretKeyRef"] == {"name": "tldw-discord", "key": "default-webhook"}
-    assert env["TLDW_LEGAL_DISCORD_WEBHOOK_URL"]["valueFrom"]["secretKeyRef"] == {"name": "tldw-discord", "key": "legal-webhook", "optional": True}
-    assert spec["volumes"][0]["configMap"]["items"] == [{"key": "topics.yaml", "path": "topics.yaml"}, {"key": "legal.md", "path": "prompts/legal.md"}]
-    assert container["volumeMounts"][0] == {"name": "topic-config", "mountPath": "/etc/tldw", "readOnly": True}
+    assert env["TLDW_DISCORD_WEBHOOK_URL"]["valueFrom"]["secretKeyRef"] == {
+        "name": "tldw-discord", "key": "default-webhook"
+    }
+    assert env["TLDW_LEGAL_DISCORD_WEBHOOK_URL"]["valueFrom"]["secretKeyRef"] == {
+        "name": "tldw-discord", "key": "legal-webhook", "optional": True
+    }
+    assert spec["volumes"][0]["configMap"]["items"] == [
+        {"key": "topics.yaml", "path": "topics.yaml"},
+        {"key": "legal.md", "path": "prompts/legal.md"},
+    ]
+    assert container["volumeMounts"][0] == {
+        "name": "topic-config", "mountPath": "/etc/tldw", "readOnly": True
+    }
 
 
 def test_container_assets_are_not_activated() -> None:

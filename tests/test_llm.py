@@ -14,19 +14,25 @@ import asyncio
 import json
 import logging
 import os
+from unittest.mock import AsyncMock
 
 import pytest
+from openai.resources.responses import AsyncResponses
+from openai.types.responses import Response
 from pydantic import ValidationError
 
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
 from pydantic_ai.messages import (  # noqa: E402
+    FinishReason,
     ModelMessage,
     ModelResponse,
     TextPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel  # noqa: E402
+from pydantic_ai.exceptions import IncompleteToolCall  # noqa: E402
+from pydantic_ai.usage import RequestUsage  # noqa: E402
 
 from helpers import make_settings, make_takeaways  # noqa: E402
 from tldw.config import Settings  # noqa: E402
@@ -155,22 +161,156 @@ async def test_openai_analyzer_returns_canned_takeaways() -> None:
     assert result.items[0].bullets[0].timestamp_seconds == 0
 
 
-async def test_openai_analyzer_retries_on_invalid_first_response() -> None:
-    """Invalid JSON on the first call is retried and the second call succeeds."""
+async def test_openai_analyzer_retries_on_invalid_first_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Invalid output is retried and each response logs its own token usage."""
     payload = _valid_payload()
     calls = {"count": 0}
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Return invalid output once, with distinct usage for each response."""
         calls["count"] += 1
-        if calls["count"] == 1:
-            return ModelResponse(parts=[TextPart(content="not json")])
-        return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
+        return ModelResponse(
+            parts=[TextPart(content="not json" if calls["count"] == 1 else json.dumps(payload))],
+            usage=RequestUsage(input_tokens=100, output_tokens=calls["count"] * 10),
+        )
 
     analyzer = OpenAIAnalyzer(make_settings(openai_api_key="test-key"), model=_function_model(respond))
-    result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
+    with caplog.at_level(logging.INFO, logger="tldw.llm"):
+        result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
     assert calls["count"] == 2
     assert len(result.items) == 3
+    records = [r for r in caplog.records if getattr(r, "event", None) == "llm_response"]
+    assert [r.__dict__["attempt"] for r in records] == [1, 2]
+    assert [r.__dict__["output_tokens"] for r in records] == [10, 20]
+
+
+@pytest.mark.parametrize(
+    "output_tokens,reasoning_tokens,finish_reason,provider_reason,budget,level,message",
+    [
+        (899, 0, "stop", "completed", 1000, logging.INFO, "LLM response"),
+        (900, 100, "stop", "completed", 1000, logging.WARNING, "LLM output token usage is near the limit"),
+        (1000, None, "stop", None, 1000, logging.WARNING, "LLM output token usage is near the limit"),
+        (800, 700, "length", "max_output_tokens", 1000, logging.WARNING, "LLM output token limit reached"),
+        (800, None, None, "max_output_tokens", 1000, logging.WARNING, "LLM output token limit reached"),
+        (100, None, None, None, 1000, logging.INFO, "LLM response"),
+        (100, None, "stop", None, 0, logging.INFO, "LLM response"),
+        (100, None, "stop", None, -1, logging.INFO, "LLM response"),
+    ],
+)
+async def test_openai_analyzer_logs_response_metadata(
+    caplog: pytest.LogCaptureFixture,
+    output_tokens: int,
+    reasoning_tokens: int | None,
+    finish_reason: FinishReason | None,
+    provider_reason: str | None,
+    budget: int,
+    level: int,
+    message: str,
+) -> None:
+    """Usage warnings distinguish high usage from explicit budget exhaustion."""
+    # Arrange: include private provider metadata that must never reach logs.
+    response = ModelResponse(
+        parts=[TextPart(content=json.dumps(_valid_payload()))],
+        model_name="reported-model",
+        usage=RequestUsage(
+            input_tokens=1234,
+            output_tokens=output_tokens,
+            details={} if reasoning_tokens is None else {"reasoning_tokens": reasoning_tokens},
+        ),
+        finish_reason=finish_reason,
+        provider_details=None if provider_reason is None else {
+            "finish_reason": provider_reason, "private": "DO_NOT_LOG",
+        },
+    )
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Return a valid briefing with the selected response metadata."""
+        return response
+
+    analyzer = OpenAIAnalyzer(
+        make_settings(openai_api_key="test-key", llm_max_output_tokens=budget),
+        model=FunctionModel(respond, model_name="reported-model"),
+    )
+
+    # Act: reuse the analyzer to confirm response numbering resets per video.
+    with caplog.at_level(logging.INFO, logger="tldw.llm"):
+        result = await analyzer.analyze("transcript", video_id="vid1", title="Title")
+        await analyzer.analyze("transcript", video_id="vid2", title="Title")
+
+    # Assert: one structured record per response, with no response content.
+    assert len(result.items) == 3
+    records = [r for r in caplog.records if getattr(r, "event", None) == "llm_response"]
+    assert len(records) == 2
+    for record, video_id in zip(records, ["vid1", "vid2"], strict=True):
+        assert record.levelno == level
+        assert record.getMessage() == message
+        assert {key: record.__dict__[key] for key in (
+            "video_id", "model", "attempt", "input_tokens", "output_tokens",
+            "reasoning_tokens", "max_output_tokens", "output_budget_fraction",
+            "finish_reason", "provider_finish_reason",
+        )} == {
+            "video_id": video_id,
+            "model": "reported-model",
+            "attempt": 1,
+            "input_tokens": 1234,
+            "output_tokens": output_tokens,
+            "reasoning_tokens": reasoning_tokens,
+            "max_output_tokens": budget,
+            "output_budget_fraction": output_tokens / budget if budget > 0 else None,
+            "finish_reason": finish_reason,
+            "provider_finish_reason": provider_reason,
+        }
+        assert "DO_NOT_LOG" not in repr(record.__dict__)
+        assert "Bottom line for the trader." not in repr(record.__dict__)
+
+
+async def test_openai_analyzer_logs_truncated_response_before_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The real Responses adapter logs exhausted usage before validation fails."""
+    # Arrange: emulate an SDK response with truncated structured tool output.
+    response = Response.model_validate({
+        "id": "resp_test", "created_at": 1, "object": "response",
+        "model": "reported-model", "status": "incomplete",
+        "incomplete_details": {"reason": "max_output_tokens"},
+        "parallel_tool_calls": False, "tool_choice": "required", "tools": [],
+        "output": [{
+            "type": "function_call", "id": "fc_test", "call_id": "call_test",
+            "name": "final_result", "arguments": '{"bottom_line":',
+            "status": "incomplete",
+        }],
+        "usage": {
+            "input_tokens": 1200, "output_tokens": 8192, "total_tokens": 9392,
+            "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 7000},
+        },
+    })
+    create = AsyncMock(return_value=response)
+    monkeypatch.setattr(AsyncResponses, "create", create)
+    analyzer = OpenAIAnalyzer(make_settings(
+        openai_api_key="test-key", llm_max_output_tokens=8192,
+    ))
+
+    # Act: no network is used, but the SDK response goes through the real adapter.
+    with caplog.at_level(logging.INFO, logger="tldw.llm"):
+        with pytest.raises(IncompleteToolCall):
+            await analyzer.analyze("transcript", video_id="vid1", title="Title")
+
+    # Assert: the warning survives the failed run and preserves provider details.
+    assert create.await_count == 3
+    assert create.call_args.kwargs["max_output_tokens"] == 8192
+    records = [r for r in caplog.records if getattr(r, "event", None) == "llm_response"]
+    assert [r.__dict__["attempt"] for r in records] == [1, 2, 3]
+    for record in records:
+        assert record.levelno == logging.WARNING
+        assert record.getMessage() == "LLM output token limit reached"
+        assert record.__dict__["finish_reason"] == "length"
+        assert record.__dict__["provider_finish_reason"] == "max_output_tokens"
+        assert record.__dict__["output_tokens"] == 8192
+        assert record.__dict__["reasoning_tokens"] == 7000
 
 
 async def test_openai_analyzer_times_out() -> None:

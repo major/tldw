@@ -21,6 +21,7 @@ NOT_READY, UNAVAILABLE, RATE_LIMITED).
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from collections.abc import Callable
@@ -161,6 +162,10 @@ def build_audio_ydl_opts(
         "outtmpl": str(dest_dir / "%(id)s.%(ext)s"),
         "quiet": True,
         "noprogress": True,
+        # Route diagnostics through the shared JSON handler instead of stderr.
+        # yt-dlp sends routine progress to DEBUG, keeping quiet mode quiet.
+        "logger": logging.getLogger("yt_dlp"),
+        "nocolor": True,
         # We want a DownloadError raised so the worker can classify it.
         "ignoreerrors": False,
         "retries": 3,
@@ -335,4 +340,3 @@ def compress_audio(
 # segment can be much shorter or longer than the target. Fixing that means
 # forcing keyframes at exact intervals (or splitting on silence with
 # silencedetect) and then remuxing, which is more than this step needs today.
-

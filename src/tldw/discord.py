@@ -195,8 +195,32 @@ async def send(
 
     url = webhook_url + DEFAULT_WEBHOOK_QUERY
     for index, chunk in enumerate(chunks):
-        await _post_payload(client, url, {"content": chunk}, sleep=sleep)
+        await _post_payload(
+            client,
+            url,
+            {"content": chunk, "allowed_mentions": {"parse": []}},
+            sleep=sleep,
+        )
         logger.debug("posted discord chunk %d (%d chars)", index, len(chunk))
+
+
+async def send_alert(
+    client: httpx2.AsyncClient,
+    webhook_url: str,
+    content: str,
+    *,
+    user_id: str,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Send one alert with only the configured user allowed to be mentioned."""
+    mention = f"<@{user_id}>"
+    payload = {
+        "content": f"{mention} {content}"[:DEFAULT_MAX_CHARS],
+        "allowed_mentions": {"parse": [], "users": [user_id]},
+    }
+    await _post_payload(
+        client, webhook_url + DEFAULT_WEBHOOK_QUERY, payload, sleep=sleep
+    )
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -435,5 +459,7 @@ async def send_embeds(
             f"got {len(embeds)}"
         )
     url = webhook_url + DEFAULT_WEBHOOK_QUERY
-    await _post_payload(client, url, {"embeds": embeds}, sleep=sleep)
+    await _post_payload(
+        client, url, {"embeds": embeds, "allowed_mentions": {"parse": []}}, sleep=sleep
+    )
     logger.debug("posted discord embeds message (%d embeds)", len(embeds))

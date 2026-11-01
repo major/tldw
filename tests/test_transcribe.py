@@ -317,7 +317,9 @@ def test_transcribe_raises_transcribe_error_on_empty_api_key(
 
     # Act / Assert
     with pytest.raises(transcribe.TranscribeError, match="api_key is required"):
-        asyncio.run(transcribe.transcribe(audio_path, **_kwargs(audio_path, api_key="")))
+        asyncio.run(
+            transcribe.transcribe(audio_path, **_kwargs(audio_path, api_key=""))
+        )
 
 
 def test_transcribe_translates_api_status_error_to_transcribe_error(
@@ -334,6 +336,61 @@ def test_transcribe_translates_api_status_error_to_transcribe_error(
         asyncio.run(transcribe.transcribe(audio_path, **_kwargs(audio_path)))
     assert exc_info.value.__cause__ is original
     assert exc_info.value.status_code == 429
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(429, "credit_balance_exhausted"), (400, "invalid_value")],
+)
+async def test_transcribe_preserves_provider_failure_as_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int, code: str
+) -> None:
+    """Provider failures retain their structured cause without producing text."""
+    # Arrange
+    audio_path = _audio_file(tmp_path)
+    request = httpx2.Request("POST", "https://example.test/v1/audio/transcriptions")
+    body = {"code": code, "message": "Provider failure"}
+    original = openai.APIStatusError(
+        "Provider failure",
+        response=httpx2.Response(status, request=request),
+        body=body,
+    )
+    _install_fake(monkeypatch, raises=original)
+
+    # Act
+    with pytest.raises(transcribe.TranscribeError) as exc_info:
+        await transcribe.transcribe(audio_path, **_kwargs(audio_path))
+
+    # Assert
+    assert exc_info.value.status_code == status
+    assert exc_info.value.error_code == (code if status == 429 else None)
+    assert exc_info.value.__cause__ is original
+    assert original.body == body
+    assert audio_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"error": {"type": "insufficient_quota"}}, "insufficient_quota"),
+        ({"code": "rate_limit_exceeded"}, "rate_limit_exceeded"),
+        ({"error": "secret"}, None),
+        (None, None),
+    ],
+)
+async def test_transcribe_classifies_safe_error_codes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, expected: str | None
+) -> None:
+    """Only known structured codes cross the transcription boundary."""
+    audio_path = _audio_file(tmp_path)
+    request = httpx2.Request("POST", "https://example.test")
+    original = openai.APIStatusError(
+        "secret", response=httpx2.Response(429, request=request), body=body
+    )
+    _install_fake(monkeypatch, raises=original)
+    with pytest.raises(transcribe.TranscribeError) as exc_info:
+        await transcribe.transcribe(audio_path, **_kwargs(audio_path))
+    assert exc_info.value.error_code == expected
 
 
 def test_transcribe_forwards_prompt(

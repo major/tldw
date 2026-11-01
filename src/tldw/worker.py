@@ -59,6 +59,7 @@ from tldw.audio import (
     compress_audio,
 )
 from tldw.audio import download_audio as audio_download
+from tldw.alerts import flush_failure_alert, record_failure
 from tldw.backoff import backoff_delay
 from tldw.config import Settings
 from tldw.discord import build_takeaway_embeds, format_message
@@ -225,6 +226,7 @@ async def _run_loop(
     on, so one bad record can never kill the worker.
     """
     store: QueueStore = app.state.queue
+    next_alert_attempt_at = 0.0
 
     while True:
         try:
@@ -234,29 +236,37 @@ async def _run_loop(
             await sleep(DEFAULT_EMPTY_QUEUE_SLEEP)
             continue
 
-        if record is None:
-            await sleep(DEFAULT_EMPTY_QUEUE_SLEEP)
-            continue
-
-        try:
-            await _process_record_audio(
-                record,
-                settings,
-                store,
-                client,
-                download_audio=download_audio,
-                compress_audio=compress_audio,
-                transcribe=transcribe,
-                analyze=analyze,
-                send=send,
-                send_embeds=send_embeds,
-                sleep=sleep,
-            )
-        except Exception:
-            # A record that fails outside its own stage try blocks must not
-            # kill the loop; log it and move on to the next record.
-            logger.exception("processing raised for %s", record.video_id)
-        await sleep(DEFAULT_RECORD_PACING)
+        if record is not None:
+            try:
+                await _process_record_audio(
+                    record,
+                    settings,
+                    store,
+                    client,
+                    download_audio=download_audio,
+                    compress_audio=compress_audio,
+                    transcribe=transcribe,
+                    analyze=analyze,
+                    send=send,
+                    send_embeds=send_embeds,
+                    sleep=sleep,
+                )
+            except Exception:
+                logger.exception("processing raised for %s", record.video_id)
+                record_failure(
+                    settings,
+                    store,
+                    record,
+                    "processing",
+                    "Video processing failed.",
+                    True,
+                )
+        if time.monotonic() >= next_alert_attempt_at:
+            if not await flush_failure_alert(settings, store, client):
+                next_alert_attempt_at = time.monotonic() + 60.0
+        await sleep(
+            DEFAULT_EMPTY_QUEUE_SLEEP if record is None else DEFAULT_RECORD_PACING
+        )
 
 
 def first_lines(text: str, n: int) -> list[str]:
@@ -326,6 +336,15 @@ async def _process_record_audio(
     # 48 hour give-up. Measured from enqueued_at, not the video's publish time:
     # the cutoff is about how long we have been trying, not how old the video is.
     if now - record.enqueued_at > settings.giveup_seconds:
+        record_failure(
+            settings,
+            store,
+            record,
+            "processing",
+            "Video processing exceeded the retry window.",
+            False,
+            now,
+        )
         store.mark_terminal(
             record.video_id,
             TerminalState.GIVE_UP_NEVER,
@@ -342,6 +361,15 @@ async def _process_record_audio(
             text = txt_path.read_text(encoding="utf-8")
         except OSError:
             logger.exception("cached transcript unreadable for %s", record.video_id)
+            record_failure(
+                settings,
+                store,
+                record,
+                "transcription",
+                "Cached transcript could not be read.",
+                True,
+                now,
+            )
             delay = backoff_delay(
                 record.attempts + 1,
                 base=settings.poll_base_seconds,
@@ -448,6 +476,9 @@ async def _download_stage(
         )
     except Exception:
         logger.exception("audio download raised for %s", record.video_id)
+        record_failure(
+            settings, store, record, "download", "Audio download failed.", True, now
+        )
         delay = backoff_delay(
             record.attempts + 1,
             base=settings.poll_base_seconds,
@@ -462,6 +493,15 @@ async def _download_stage(
             # A READY result without a path should not happen. Reschedule with
             # backoff rather than leaving the record immediately due again.
             logger.info("audio ready: video=%s path=None", record.video_id)
+            record_failure(
+                settings,
+                store,
+                record,
+                "download",
+                "Audio download returned no file path.",
+                True,
+                now,
+            )
             delay = backoff_delay(
                 record.attempts + 1,
                 base=settings.poll_base_seconds,
@@ -487,6 +527,15 @@ async def _download_stage(
         # Count consecutive 429s on the row. Any other outcome resets this to 0,
         # so the give-up budget only trips on a real streak.
         new_streak = record.rate_limit_streak + 1
+        record_failure(
+            settings,
+            store,
+            record,
+            "download",
+            "Audio download was rate limited.",
+            new_streak < DEFAULT_MAX_RATE_LIMIT_ATTEMPTS,
+            now,
+        )
         if new_streak >= DEFAULT_MAX_RATE_LIMIT_ATTEMPTS:
             store.mark_terminal(
                 record.video_id,
@@ -508,6 +557,15 @@ async def _download_stage(
         return None
 
     if result.state is ProbeState.UNAVAILABLE:
+        record_failure(
+            settings,
+            store,
+            record,
+            "download",
+            "Video audio is unavailable.",
+            False,
+            now,
+        )
         store.mark_terminal(
             record.video_id,
             TerminalState.GIVE_UP_UNAVAILABLE,
@@ -563,6 +621,15 @@ async def _compress_stage(
         )
     except CompressError:
         logger.exception("compress failed for %s", record.video_id)
+        record_failure(
+            settings,
+            store,
+            record,
+            "compression",
+            "Audio compression failed.",
+            True,
+            now,
+        )
         delay = backoff_delay(
             record.attempts + 1,
             base=300.0,
@@ -605,6 +672,22 @@ async def _transcribe_stage(
         )
     except TranscribeError as exc:
         status = exc.status_code
+        retrying = not (status is not None and 400 <= status < 500 and status != 429)
+        if exc.error_code in {"credit_balance_exhausted", "insufficient_quota"}:
+            reason = "OpenAI credits or quota exhausted; check billing."
+        else:
+            reason = (
+                f"Transcription failed (HTTP {status})."
+                if isinstance(status, int)
+                else "Transcription failed."
+            )
+        logger.warning(
+            "transcription failed for %s: status=%s code=%s",
+            record.video_id,
+            status,
+            exc.error_code,
+        )
+        record_failure(settings, store, record, "transcription", reason, retrying, now)
         if status is not None and 400 <= status < 500 and status != 429:
             # A permanent client error: retrying cannot fix a bad upload.
             store.mark_terminal(
@@ -612,7 +695,6 @@ async def _transcribe_stage(
             )
             return None
         # 429 and 5xx are transient; fall through to the backoff reschedule.
-        logger.warning("transcription retryable for %s: %s", record.video_id, exc)
         delay = backoff_delay(
             record.attempts + 1,
             base=settings.poll_base_seconds,
@@ -628,7 +710,18 @@ async def _transcribe_stage(
     ) as exc:
         # The production transcribe wraps APIStatusError, but a fake seam or a
         # future direct call can still surface these; treat them as transient.
-        logger.warning("transcription retryable for %s: %s", record.video_id, exc)
+        logger.warning(
+            "transcription retryable for %s: %s", record.video_id, type(exc).__name__
+        )
+        record_failure(
+            settings,
+            store,
+            record,
+            "transcription",
+            "Transcription request failed.",
+            True,
+            now,
+        )
         delay = backoff_delay(
             record.attempts + 1,
             base=settings.poll_base_seconds,
@@ -638,12 +731,32 @@ async def _transcribe_stage(
         store.reschedule(record.video_id, next_attempt_at=now + delay)
         return None
     except openai.APIError as exc:
+        record_failure(
+            settings,
+            store,
+            record,
+            "transcription",
+            "Transcription API failed.",
+            False,
+            now,
+        )
         store.mark_terminal(
             record.video_id, TerminalState.GIVE_UP_AUDIO, detail=str(exc)
         )
         return None
     except Exception as exc:
-        logger.warning("transcription raised for %s: %s", record.video_id, exc)
+        logger.warning(
+            "transcription raised for %s: %s", record.video_id, type(exc).__name__
+        )
+        record_failure(
+            settings,
+            store,
+            record,
+            "transcription",
+            "Transcription failed unexpectedly.",
+            True,
+            now,
+        )
         delay = backoff_delay(
             record.attempts + 1,
             base=settings.poll_base_seconds,
@@ -742,6 +855,15 @@ async def _llm_and_send_stage(
                     record.video_id,
                     exc,
                 )
+                record_failure(
+                    settings,
+                    store,
+                    record,
+                    "analysis",
+                    "Analysis failed; using a plain transcript fallback.",
+                    False,
+                    now,
+                )
                 await _send_plain(detail="llm_fallback")
                 return
             _bullets = sum(len(t.bullets) for t in takeaways.items)
@@ -782,6 +904,15 @@ async def _llm_and_send_stage(
         await _send_plain(detail=None)
     except Exception:
         logger.exception("send raised for %s", record.video_id)
+        record_failure(
+            settings,
+            store,
+            record,
+            "delivery",
+            "Final summary processing failed.",
+            True,
+            now,
+        )
         delay = backoff_delay(
             record.attempts + 1,
             base=300.0,

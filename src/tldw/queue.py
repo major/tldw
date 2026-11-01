@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS videos (
 CREATE INDEX IF NOT EXISTS idx_due
     ON videos(next_attempt_at)
     WHERE terminal_state IS NULL;
+CREATE TABLE IF NOT EXISTS failure_alerts (
+    video_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    retrying INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    sent_at REAL,
+    PRIMARY KEY (video_id, stage)
+);
 """
 
 # Queue files created before rate_limit_streak existed need the column added.
@@ -122,6 +131,22 @@ class QueueRecord:
     terminal_state: TerminalState | None
     detail: str | None
     rate_limit_streak: int
+
+
+@dataclass(frozen=True, slots=True)
+class FailureAlert:
+    """A pending alert with its video's display metadata."""
+
+    video_id: str
+    stage: str
+    reason: str
+    retrying: bool
+    title: str
+    channel_name: str
+    url: str
+    created_at: float
+    current_terminal_state: str | None
+    current_detail: str | None
 
 
 class QueueStore:
@@ -369,6 +394,59 @@ class QueueStore:
             "UPDATE videos SET terminal_state = ?, detail = ? "
             "WHERE video_id = ? AND terminal_state IS NULL",
             (state.value, detail, video_id),
+        )
+        self._conn.commit()
+
+    def enqueue_failure_alert(
+        self,
+        video_id: str,
+        stage: str,
+        reason: str,
+        retrying: bool,
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Persist the first failure for a video and stage."""
+        self._ensure_open()
+        self._conn.execute(
+            "INSERT OR IGNORE INTO failure_alerts "
+            "(video_id, stage, reason, retrying, created_at) VALUES (?, ?, ?, ?, ?)",
+            (video_id, stage, reason, retrying, time.time() if now is None else now),
+        )
+        self._conn.commit()
+
+    def next_failure_alert(self) -> FailureAlert | None:
+        """Return the oldest unsent alert and its video metadata."""
+        self._ensure_open()
+        row = self._conn.execute(
+            "SELECT a.video_id, a.stage, a.reason, a.retrying, v.title, v.channel_name, v.url, "
+            "a.created_at, v.terminal_state, v.detail "
+            "FROM failure_alerts a JOIN videos v ON v.video_id = a.video_id "
+            "WHERE a.sent_at IS NULL ORDER BY a.created_at, a.rowid LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return FailureAlert(
+            row["video_id"],
+            row["stage"],
+            row["reason"],
+            bool(row["retrying"]),
+            row["title"],
+            row["channel_name"],
+            row["url"],
+            row["created_at"],
+            row["terminal_state"],
+            row["detail"],
+        )
+
+    def mark_failure_alert_sent(
+        self, video_id: str, stage: str, *, now: float | None = None
+    ) -> None:
+        """Mark an alert sent only after Discord accepts it."""
+        self._ensure_open()
+        self._conn.execute(
+            "UPDATE failure_alerts SET sent_at = ? WHERE video_id = ? AND stage = ?",
+            (time.time() if now is None else now, video_id, stage),
         )
         self._conn.commit()
 

@@ -93,6 +93,7 @@ class Settings(BaseSettings):
 
     # Discord webhook delivery.
     discord_webhook_url: str | None = None
+    discord_alert_user_id: str | None = Field(default=None, pattern=r"^[0-9]{17,20}$")
 
     # Queue storage.
     queue_file: Path = Path("queue.sqlite3")

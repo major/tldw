@@ -64,10 +64,22 @@ class TranscribeError(RuntimeError):
     such as a missing API key.
     """
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str | None = None,
+    ) -> None:
         """Store the message and optional HTTP status code."""
         super().__init__(message)
         self.status_code = status_code
+        self.error_code = (
+            error_code
+            if error_code
+            in {"credit_balance_exhausted", "insufficient_quota", "rate_limit_exceeded"}
+            else None
+        )
 
 
 def build_prompt(
@@ -150,9 +162,20 @@ async def transcribe(
                 # The worker inspects the status to pick between a
                 # RATE_LIMITED retry and GIVE_UP_AUDIO. Other openai errors
                 # (connection, timeout, etc.) pass through for the worker.
+                body = exc.body
+                if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                    body = body["error"]
+                code = None
+                if isinstance(body, dict):
+                    code = body.get("code")
+                    if not isinstance(code, str):
+                        code = None
+                    if body.get("type") == "insufficient_quota":
+                        code = "insufficient_quota"
                 raise TranscribeError(
                     f"transcription failed with status {exc.status_code}",
                     status_code=exc.status_code,
+                    error_code=code,
                 ) from exc
 
     return result.text

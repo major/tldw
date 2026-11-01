@@ -760,6 +760,8 @@ async def test_process_record_audio_429_api_error_reschedules_with_audio_path_pr
     )
     transcribe = FakeTranscribe(raises=TranscribeError("slow down", status_code=429))
     compressed = settings.audio_dir / f"{_VIDEO_ID}.compressed.{settings.audio_format}"
+    sender = CountingSend()
+    embeds_sender = CountingSendEmbeds()
 
     # Act
     await _run_audio(
@@ -770,8 +772,8 @@ async def test_process_record_audio_429_api_error_reschedules_with_audio_path_pr
         compress=FakeCompress(creates=True),
         transcribe=transcribe,
         analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
-        sender=CountingSend(),
-        embeds_sender=CountingSendEmbeds(),
+        sender=sender,
+        embeds_sender=embeds_sender,
     )
 
     # Assert
@@ -782,6 +784,9 @@ async def test_process_record_audio_429_api_error_reschedules_with_audio_path_pr
     # The next pass skips download and compress, so the streak-free retry
     # cannot re-download the audio.
     assert updated.next_attempt_at > now
+    assert updated.attempts == 1
+    assert compressed.exists()
+    assert sender.calls == embeds_sender.calls == 0
 
 
 # ---------------------------------------------------------------------------

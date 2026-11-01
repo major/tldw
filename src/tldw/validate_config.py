@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -26,7 +27,8 @@ def _check_queue(path: Path, registry: TopicRegistry | None) -> int:
     if Path(f"{path}-wal").exists():
         raise TopicConfigError("queue: WAL exists; checkpoint the database before inspection")
     try:
-        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True) as db:
+        uri = path.resolve().as_uri() + "?mode=ro&immutable=1"
+        with closing(sqlite3.connect(uri, uri=True)) as db:
             columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
             if not {"video_id", "terminal_state"} <= columns:
                 raise TopicConfigError("queue: missing required videos schema")

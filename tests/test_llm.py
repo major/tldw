@@ -175,15 +175,24 @@ async def test_analyzer_system_prompt(override: str | None) -> None:
 
     def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         """Capture system prompts and return a valid response."""
-        captured.extend(part.content for msg in messages for part in msg.parts if isinstance(part, SystemPromptPart))
+        captured.extend(
+            part.content
+            for msg in messages
+            for part in msg.parts
+            if isinstance(part, SystemPromptPart)
+        )
         return ModelResponse(parts=[TextPart(content=json.dumps(_valid_payload()))])
 
     kwargs = {} if override is None else {"system_prompt": override}
-    analyzer = OpenAIAnalyzer(make_settings(openai_api_key="test-key"), model=_function_model(respond), **kwargs)
+    analyzer = OpenAIAnalyzer(
+        make_settings(openai_api_key="test-key"), model=_function_model(respond), **kwargs
+    )
     # Act
     await analyzer.analyze("transcript", video_id="v", title="title")
     # Assert
-    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == "910c538d53ebaeb3f9ecb616443730e7ddc4643d723142fbed548d606712fda5"
+    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == (
+        "910c538d53ebaeb3f9ecb616443730e7ddc4643d723142fbed548d606712fda5"
+    )
     assert captured == [override or SYSTEM_PROMPT]
 
 

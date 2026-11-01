@@ -14,7 +14,9 @@ def test_load_topics_resolves_prompt_and_secret(tmp_path: Path) -> None:
     # Arrange
     (tmp_path / "prompt.txt").write_text(" prompt\n")
     path = tmp_path / "topics.yml"
-    path.write_text("version: 1\ntopics:\n  default:\n    channels:\n      - channel_id: UCabcdefghijklmnopqrstuv\n    prompt: {file: prompt.txt}\n    discord: {webhook_env: WEBHOOK}\n")
+    path.write_text(
+        "version: 1\ntopics:\n  default:\n    channels:\n      - channel_id: UCabcdefghijklmnopqrstuv\n    prompt: {file: prompt.txt}\n    discord: {webhook_env: WEBHOOK}\n"
+    )
     # Act
     registry = load_topics(path, environ={"WEBHOOK": "secret-value"})
     # Assert
@@ -25,12 +27,15 @@ def test_load_topics_resolves_prompt_and_secret(tmp_path: Path) -> None:
         cast(MutableMapping, registry.topics)["other"] = registry.topics["default"]
 
 
-@pytest.mark.parametrize("text", [
-    "version: 1\nversion: 1\ntopics: {}\n",
-    "version: true\ntopics: {}\n",
-    "version: 1\ntopics: {}\n",
-    "version: 1\ntopics:\n  default: {enabled: false, channels: [], prompt: {builtin: unknown}, discord: {webhook_env: WEBHOOK}}\n",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "version: 1\nversion: 1\ntopics: {}\n",
+        "version: true\ntopics: {}\n",
+        "version: 1\ntopics: {}\n",
+        "version: 1\ntopics:\n  default: {enabled: false, channels: [], prompt: {builtin: unknown}, discord: {webhook_env: WEBHOOK}}\n",
+    ],
+)
 def test_invalid_topics_are_rejected(tmp_path: Path, text: str) -> None:
     """Reject invalid structure and duplicate keys."""
     from tldw.topics import TopicConfigError, load_topics
@@ -59,7 +64,9 @@ def topic_document() -> dict:
 
 
 @pytest.mark.parametrize("version", [True, 1.0])
-def test_version_requires_integer(tmp_path: Path, topic_document: dict, version: object) -> None:
+def test_version_requires_integer(
+    tmp_path: Path, topic_document: dict, version: object
+) -> None:
     """Reject boolean and floating-point versions on otherwise valid documents."""
     from tldw.topics import TopicConfigError, load_topics
 

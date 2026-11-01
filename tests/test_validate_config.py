@@ -38,14 +38,18 @@ def test_legacy_queue_is_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert database.read_bytes() == before
 
 
-def test_compare_legacy_allows_csv_only_in_preflight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compare_legacy_allows_csv_only_in_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Migration comparison permits CSV while normal YAML validation rejects it."""
     from tldw.validate_config import main
 
     # Arrange
     channel = "UCabcdefghijklmnopqrstuv"
     path = tmp_path / "topics.yml"
-    path.write_text(f"version: 1\ntopics:\n  default:\n    channels: [{{channel_id: {channel}}}]\n    prompt: {{builtin: trading}}\n    discord: {{webhook_env: TLDW_DISCORD_WEBHOOK_URL}}\n")
+    path.write_text(
+        f"version: 1\ntopics:\n  default:\n    channels: [{{channel_id: {channel}}}]\n    prompt: {{builtin: trading}}\n    discord: {{webhook_env: TLDW_DISCORD_WEBHOOK_URL}}\n"
+    )
     monkeypatch.setenv("TLDW_TOPICS_FILE", str(path))
     monkeypatch.setenv("TLDW_CHANNEL_IDS", channel)
     monkeypatch.setenv("TLDW_DISCORD_WEBHOOK_URL", "secret-value")
@@ -55,13 +59,17 @@ def test_compare_legacy_allows_csv_only_in_preflight(tmp_path: Path, monkeypatch
     main(["--compare-legacy"])
 
 
-def test_blocked_disabled_backlog_is_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_blocked_disabled_backlog_is_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A disabled topic with backlog and no destination fails without secrets."""
     from tldw.validate_config import main
 
     # Arrange
     path = tmp_path / "topics.yml"
-    path.write_text("version: 1\ntopics:\n  default: {enabled: false, channels: [], prompt: {builtin: trading}, discord: {webhook_env: MISSING}}\n")
+    path.write_text(
+        "version: 1\ntopics:\n  default: {enabled: false, channels: [], prompt: {builtin: trading}, discord: {webhook_env: MISSING}}\n"
+    )
     database = tmp_path / "queue.sqlite"
     with sqlite3.connect(database) as db:
         db.execute("CREATE TABLE videos (video_id TEXT, terminal_state TEXT)")
@@ -80,9 +88,11 @@ def test_blocked_disabled_backlog_is_safe(tmp_path: Path, monkeypatch: pytest.Mo
     assert "secret-value" not in error
 
 
-@pytest.mark.parametrize("content", ['[]', '{"channel_ids": null}', '{"channel_ids": [123]}'])
+@pytest.mark.parametrize("content", ["[]", '{"channel_ids": null}', '{"channel_ids": [123]}'])
 def test_malformed_legacy_file_exits_safely(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     content: str,
 ) -> None:
     """Malformed legacy structures produce a controlled error without input values."""
@@ -119,8 +129,10 @@ def test_queue_topic_references_and_read_only(
     database = tmp_path / "queue.sqlite"
     with sqlite3.connect(database) as db:
         db.execute("CREATE TABLE videos (video_id TEXT, terminal_state TEXT, topic_id TEXT)")
-        db.execute("INSERT INTO videos VALUES ('one', NULL, ?)",
-                   ("absent" if case == "missing" else "default",))
+        db.execute(
+            "INSERT INTO videos VALUES ('one', NULL, ?)",
+            ("absent" if case == "missing" else "default",),
+        )
     if case == "wal":
         (tmp_path / "queue.sqlite-wal").write_bytes(b"sentinel")
     before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}

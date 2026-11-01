@@ -30,9 +30,13 @@ class _Loader(yaml.SafeLoader):
             try:
                 duplicate = key in result
             except TypeError:
-                raise TopicConfigError(f"line {key_node.start_mark.line + 1}: invalid mapping key") from None
+                raise TopicConfigError(
+                    f"line {key_node.start_mark.line + 1}: invalid mapping key"
+                ) from None
             if duplicate:
-                raise TopicConfigError(f"line {key_node.start_mark.line + 1}: duplicate mapping key")
+                raise TopicConfigError(
+                    f"line {key_node.start_mark.line + 1}: duplicate mapping key"
+                )
             result[key] = self.construct_object(value_node, deep=deep)
         return result
 
@@ -150,13 +154,43 @@ def load_topics(path: Path, *, environ: Mapping[str, str] | None = None) -> Topi
         location = f"line {mark.line + 1}, column {mark.column + 1}" if mark else "document"
         raise TopicConfigError(f"{path}: invalid YAML at {location}") from None
     except ValidationError as exc:
-        fields = {"version", "topics", "enabled", "channels", "channel_id", "name", "prompt", "builtin", "file", "discord", "webhook_env"}
-        errors = "; ".join(
-            f"{'.'.join(str(part) if isinstance(part, int) or part in fields else '<key>' for part in e['loc']) or 'document'}: {e['type']}"
-            for e in exc.errors()
-        )
+        fields = {
+            "version",
+            "topics",
+            "enabled",
+            "channels",
+            "channel_id",
+            "name",
+            "prompt",
+            "builtin",
+            "file",
+            "discord",
+            "webhook_env",
+        }
+        safe_messages = {
+            "default topic is required",
+            "invalid topic slug",
+            "choose exactly one prompt source",
+            "enabled topic requires channels",
+        }
+        details = []
+        for error in exc.errors():
+            location = (
+                ".".join(
+                    str(part) if isinstance(part, int) or part in fields else "<key>"
+                    for part in error["loc"]
+                )
+                or "document"
+            )
+            reason = error["type"]
+            if reason == "value_error":
+                message = str(error.get("ctx", {}).get("error", ""))
+                if message in safe_messages:
+                    reason = message
+            details.append(f"{location}: {reason}")
+        errors = "; ".join(details)
         raise TopicConfigError(f"{path}: {errors}") from None
-    except (OSError, UnicodeError):
+    except OSError, UnicodeError:
         raise TopicConfigError(f"{path}: cannot read topics file") from None
     except TopicConfigError as exc:
         raise TopicConfigError(f"{path}: {exc}") from None
@@ -171,23 +205,39 @@ def load_topics(path: Path, *, environ: Mapping[str, str] | None = None) -> Topi
         else:
             filename = item.prompt.file or ""
             if not filename.strip() or Path(filename).is_absolute():
-                raise TopicConfigError(f"{path}: topics.{slug}.prompt.file: expected relative path")
+                raise TopicConfigError(
+                    f"{path}: topics.{slug}.prompt.file: expected relative path"
+                )
             try:
                 with (path.parent / filename).open(encoding="utf-8", newline="") as prompt_file:
                     prompt = prompt_file.read()
-            except (OSError, UnicodeError):
-                raise TopicConfigError(f"{path}: topics.{slug}.prompt.file: cannot read prompt") from None
+            except OSError, UnicodeError:
+                raise TopicConfigError(
+                    f"{path}: topics.{slug}.prompt.file: cannot read prompt"
+                ) from None
             if not prompt.strip():
                 raise TopicConfigError(f"{path}: topics.{slug}.prompt.file: prompt is blank")
         url = env.get(item.discord.webhook_env)
         url = url.strip() if url else None
         if item.enabled and not url:
-            raise TopicConfigError(f"{path}: topics.{slug}.discord.webhook_env: destination is missing or blank")
-        topic = Topic(slug, item.enabled, tuple(Source(c.channel_id, c.name) for c in item.channels), prompt, item.discord.webhook_env, url or None, item.prompt.builtin)
+            raise TopicConfigError(
+                f"{path}: topics.{slug}.discord.webhook_env: destination is missing or blank"
+            )
+        topic = Topic(
+            topic_id=slug,
+            enabled=item.enabled,
+            channels=tuple(Source(c.channel_id, c.name) for c in item.channels),
+            system_prompt=prompt,
+            webhook_env=item.discord.webhook_env,
+            webhook_url=url or None,
+            _builtin=item.prompt.builtin,
+        )
         topics[slug] = topic
         if item.enabled:
             for source in topic.channels:
                 if source.channel_id in by_channel:
-                    raise TopicConfigError(f"{path}: topics.{slug}.channels: duplicate active source")
+                    raise TopicConfigError(
+                        f"{path}: topics.{slug}.channels: duplicate active source"
+                    )
                 by_channel[source.channel_id] = topic
     return TopicRegistry(MappingProxyType(topics), MappingProxyType(by_channel))

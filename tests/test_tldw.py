@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import logging
 import runpy
+import subprocess
+import sys
+from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 import fastapi
@@ -153,6 +157,57 @@ def test_module_init_exports_main() -> None:
 
     # Assert
     assert main is tldw_cli.main
+
+
+def test_package_import_keeps_cli_dependencies_lazy() -> None:
+    """Leaf imports stay lightweight while the real main export resolves on use."""
+    # Arrange: collection imports the CLI, so use a clean interpreter instead.
+    source = Path(__file__).resolve().parents[1] / "src"
+    probe = dedent("""\
+        import sys
+        from pathlib import Path
+        import pytest_socket
+
+        pytest_socket.disable_socket()
+        source = Path(sys.argv[1])
+        sys.path.insert(0, str(source))
+        forbidden = (
+            "tldw.cli", "tldw.app", "tldw.worker",
+            "fastapi", "openai", "pydantic_ai",
+        )
+
+        import tldw
+        assert Path(tldw.__file__).resolve() == source / "tldw" / "__init__.py"
+        assert tldw.__all__ == ["main"]
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in sys.modules for prefix in forbidden
+        ), "package import loaded application dependencies"
+
+        import tldw.backoff
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in sys.modules for prefix in forbidden
+        ), "leaf import loaded application dependencies"
+        assert not hasattr(tldw, "missing_attribute")
+
+        from tldw import main
+        import tldw.cli
+        assert main is tldw.cli.main
+        assert tldw.main is main
+        """)
+
+    # Act
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", probe, str(source)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    # Assert
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_module_init_dunder_main_invokes_main(

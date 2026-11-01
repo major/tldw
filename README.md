@@ -116,6 +116,16 @@ When `TLDW_OPENAI_API_KEY` is set, the worker sends the transcript through the O
 
 If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a download, so it does not consume the request budget. :robot:
 
+#### Output token diagnostics :mag:
+
+Each returned model response emits a structured `event=llm_response` log before output validation, including responses that trigger retries or fail the analysis. Fields include `video_id`, `model`, `attempt` (starting at 1 per analysis), `input_tokens`, `output_tokens`, `reasoning_tokens`, `max_output_tokens`, `output_budget_fraction`, `finish_reason`, and `provider_finish_reason`. Reasoning tokens are included in output tokens, not added to them; unavailable reasoning counts and finish reasons are `null`. Prompts, transcript text, output content, and unrelated provider metadata are not included.
+
+- **INFO, `LLM response`:** normal output usage.
+- **WARNING, `LLM output token usage is near the limit`:** output usage is at least 90% of the configured budget, without an explicit truncation reason. Even 100% usage alone does not prove truncation.
+- **WARNING, `LLM output token limit reached`:** the normalized finish reason is `length` or the provider reason is `max_output_tokens`. This is an explicit signal that the output budget was exhausted, even if validation later fails.
+
+Use these warnings to decide whether to raise `TLDW_LLM_MAX_OUTPUT_TOKENS`. The diagnostics do not change the budget, retries, or fallback behavior. Requests that raise before returning a model response still use the existing failure log and have no response-usage record. SDK-internal transport retries are not counted as separate attempts. For a nonpositive configured budget, `output_budget_fraction` is `null` and usage-based warnings are disabled.
+
 ## Run :rocket:
 
 ```bash

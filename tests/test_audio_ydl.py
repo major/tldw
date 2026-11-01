@@ -10,7 +10,10 @@ scan is exercised end to end.
 
 from __future__ import annotations
 
+import json
+import logging
 from functools import partial
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -22,6 +25,7 @@ from tldw.audio import (
     build_audio_ydl_opts,
     download_audio,
 )
+from tldw.cli import _JSONFormatter
 
 
 class FakeYoutubeDL:
@@ -153,6 +157,49 @@ def test_build_audio_ydl_opts_selects_original_over_smaller_dub(tmp_path: Path) 
 
     # Assert
     assert result["format_id"] == "original"
+
+
+def test_build_audio_ydl_opts_routes_diagnostics_to_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real yt-dlp diagnostics propagate as JSON without console output or chatter."""
+    # Arrange
+    import yt_dlp
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(_JSONFormatter())
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [handler])
+    monkeypatch.setattr(root, "level", logging.INFO)
+    ydl_logger = logging.getLogger("yt_dlp")
+    monkeypatch.setattr(ydl_logger, "handlers", [])
+    monkeypatch.setattr(ydl_logger, "level", logging.NOTSET)
+    monkeypatch.setattr(ydl_logger, "propagate", True)
+    monkeypatch.setattr(ydl_logger, "disabled", False)
+    opts = build_audio_ydl_opts(tmp_path)
+
+    # Act
+    with yt_dlp.YoutubeDL(opts, auto_init=False) as ydl:
+        ydl.to_screen("[youtube] Extracting URL")
+        ydl.write_debug("debug details")
+        ydl.report_warning("[youtube] This live event will begin in 2 days.")
+        with pytest.raises(DownloadError, match="No video formats found!"):
+            ydl.report_error("[youtube] abc123: No video formats found!")
+
+    # Assert
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == ""
+    fields = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert [(item["level"], item["logger"], item["msg"]) for item in fields] == [
+        ("WARNING", "yt_dlp", "[youtube] This live event will begin in 2 days."),
+        ("ERROR", "yt_dlp", "ERROR: [youtube] abc123: No video formats found!"),
+    ]
+    assert all("\x1b" not in item["msg"] for item in fields)
+    assert opts["nocolor"] is True
 
 
 def test_build_audio_ydl_opts_uses_2026_player_clients(tmp_path: Path) -> None:

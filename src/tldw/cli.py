@@ -38,9 +38,13 @@ _PROBE_PATH = "/version"
 # a hypothetical '/versions' endpoint.
 _PROBE_MARKER = f"{_PROBE_PATH} HTTP/"
 
-# Exclude built-in fields, including ones another handler may have populated,
-# so only log-call extras are promoted to top-level JSON fields.
-_STANDARD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
+# Exclude built-in fields and Uvicorn's ANSI console template so only useful
+# log-call extras are promoted to top-level JSON fields.
+_STANDARD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {
+    "message",
+    "asctime",
+    "color_message",
+}
 
 
 class _JSONFormatter(logging.Formatter):

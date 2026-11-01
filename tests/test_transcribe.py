@@ -336,6 +336,36 @@ def test_transcribe_translates_api_status_error_to_transcribe_error(
     assert exc_info.value.status_code == 429
 
 
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(429, "credit_balance_exhausted"), (400, "invalid_value")],
+)
+async def test_transcribe_preserves_provider_failure_as_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int, code: str
+) -> None:
+    """Provider failures retain their structured cause without producing text."""
+    # Arrange
+    audio_path = _audio_file(tmp_path)
+    request = httpx2.Request("POST", "https://example.test/v1/audio/transcriptions")
+    body = {"code": code, "message": "Provider failure"}
+    original = openai.APIStatusError(
+        "Provider failure",
+        response=httpx2.Response(status, request=request),
+        body=body,
+    )
+    _install_fake(monkeypatch, raises=original)
+
+    # Act
+    with pytest.raises(transcribe.TranscribeError) as exc_info:
+        await transcribe.transcribe(audio_path, **_kwargs(audio_path))
+
+    # Assert
+    assert exc_info.value.status_code == status
+    assert exc_info.value.__cause__ is original
+    assert original.body == body
+    assert audio_path.exists()
+
+
 def test_transcribe_forwards_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -26,7 +26,6 @@ from helpers import (
     make_takeaways,
     make_video_entry,
     never_sleep,
-    noop_sleep,
     read_queue_row,
 )
 from tldw import worker
@@ -291,7 +290,6 @@ async def _run_audio(
         analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        sleep=noop_sleep,
         now=now,
     )
 

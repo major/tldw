@@ -55,8 +55,8 @@ from tldw.audio import (
     DownloadResult,
     ProbeState,
     build_audio_ydl_opts,
-    compress_audio,
 )
+from tldw.audio import compress_audio as audio_compress
 from tldw.audio import download_audio as audio_download
 from tldw.alerts import flush_failure_alert, record_failure
 from tldw.backoff import backoff_delay
@@ -110,17 +110,6 @@ def _default_analyze_factory(settings: Settings) -> AnalyzeFn:
         return await analyzer.analyze(rendered, video_id=video_id, title=title)
 
     return _analyze
-
-
-def _default_compress_audio() -> CompressAudioFn:
-    """Bind compress_audio for worker use; closure for the asyncio.to_thread call."""
-
-    def _compress(
-        src: Path, dst: Path, *, bitrate: str = "32k", timeout_s: float = 900.0
-    ) -> Path:
-        return compress_audio(src, dst, bitrate=bitrate, timeout_s=timeout_s)
-
-    return _compress
 
 
 def _default_transcribe_factory(settings: Settings) -> TranscribeFn:
@@ -187,7 +176,7 @@ async def transcript_loop(
     if download_audio is None:
         download_audio = audio_download
     if compress_audio is None:
-        compress_audio = _default_compress_audio()
+        compress_audio = audio_compress
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
     await _run_loop(
         store,
@@ -247,7 +236,6 @@ async def _run_loop(
                     analyze=analyze,
                     send=send,
                     send_embeds=send_embeds,
-                    sleep=sleep,
                 )
             except Exception:
                 logger.exception("processing raised for %s", record.video_id)
@@ -300,7 +288,6 @@ async def _process_record_audio(
     analyze: AnalyzeFn,
     send: SendFn,
     send_embeds: SendEmbedsFn,
-    sleep: SleepFn,
     now: float | None = None,
 ) -> None:
     """Process one record through the audio pipeline.
@@ -324,9 +311,7 @@ async def _process_record_audio(
 
     Each stage's success is persisted before the next stage runs, so a crash
     resumes at the last completed artifact. ``now`` is the clock seam for tests
-    and defaults to ``time.time()``. ``sleep`` is accepted for symmetry with
-    the other seams and so future per-step pacing can use it without a
-    signature change.
+    and defaults to ``time.time()``.
     """
     if now is None:
         now = time.time()

@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx2
 
-from tldw.llm import Takeaway, TakeawayBullet, Takeaways
+from tldw.takeaways import Takeaway, TakeawayBullet, Takeaways
 from tldw.youtube import format_timestamp, youtube_deep_link
 
 __all__ = [

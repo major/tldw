@@ -18,10 +18,9 @@ import asyncio
 import bisect
 import logging
 from dataclasses import dataclass
-from typing import Annotated, Any, Protocol
+from typing import Any, Protocol
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
@@ -38,6 +37,16 @@ lazy from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 lazy from pydantic_ai.providers.openai import OpenAIProvider
 
 from tldw.config import Settings
+from tldw.takeaways import BOTTOM_LINE_MAX_CHARS as BOTTOM_LINE_MAX_CHARS
+from tldw.takeaways import BULLET_MAX_CHARS as BULLET_MAX_CHARS
+from tldw.takeaways import MAX_BULLETS as MAX_BULLETS
+from tldw.takeaways import MAX_WATCH_ITEMS as MAX_WATCH_ITEMS
+from tldw.takeaways import SUMMARY_MAX_CHARS as SUMMARY_MAX_CHARS
+from tldw.takeaways import TITLE_MAX_CHARS as TITLE_MAX_CHARS
+from tldw.takeaways import WATCH_ITEM_MAX_CHARS as WATCH_ITEM_MAX_CHARS
+from tldw.takeaways import Takeaway as Takeaway
+from tldw.takeaways import TakeawayBullet as TakeawayBullet
+from tldw.takeaways import Takeaways as Takeaways
 
 __all__ = [
     "Cue",
@@ -55,19 +64,6 @@ logger = logging.getLogger(__name__)
 # Retries when the model returns output that fails schema validation. Two gives
 # the model one chance to correct a bad shape and one to recover from a flake.
 DEFAULT_OUTPUT_RETRIES: int = 2
-
-# Length caps that keep the whole briefing inside ONE Discord message, which
-# allows at most 6000 characters across all embeds. Worst case:
-#   3 x (120 + 400 + 5 x 200) = 4560 for the takeaways
-#   300 + 4 x 150             =  900 for the header
-# That leaves about 500 characters for embed titles and the footer.
-TITLE_MAX_CHARS: int = 120
-SUMMARY_MAX_CHARS: int = 400
-BULLET_MAX_CHARS: int = 200
-MAX_BULLETS: int = 5
-BOTTOM_LINE_MAX_CHARS: int = 300
-WATCH_ITEM_MAX_CHARS: int = 150
-MAX_WATCH_ITEMS: int = 4
 
 # The transcript may arrive with [m:ss] / [h:mm:ss] anchors, or without (the
 # model does the segmenting itself). The prompt asks for timestamps when anchors
@@ -110,44 +106,6 @@ SYSTEM_PROMPT = (
     "Always write every field in US English, even when the transcript is in "
     "another language."
 )
-
-
-class TakeawayBullet(BaseModel):
-    """One bullet in a takeaway, optionally tied to a moment in the video.
-
-    ``timestamp_seconds`` is optional because the audio backend delivers
-    plain text with no cue timings. The Discord renderer formats the bullet
-    with a YouTube deep link when the timestamp is set, and as a plain line
-    otherwise.
-    """
-
-    text: str = Field(min_length=1, max_length=BULLET_MAX_CHARS)
-    timestamp_seconds: int | None = Field(default=None, ge=0)
-
-
-class Takeaway(BaseModel):
-    """One takeaway: a short title, a summary, and supporting bullets."""
-
-    title: str = Field(min_length=1, max_length=TITLE_MAX_CHARS)
-    summary: str = Field(max_length=SUMMARY_MAX_CHARS)
-    # The floor is one bullet. The per-config cap is applied by the analyzer,
-    # since a Pydantic Field cannot cleanly reference a runtime setting.
-    bullets: list[TakeawayBullet] = Field(min_length=1, max_length=MAX_BULLETS)
-
-
-class Takeaways(BaseModel):
-    """The complete model output: a briefing header plus three takeaways.
-
-    ``bottom_line`` is the one-sentence verdict and ``watch`` holds the
-    concrete levels, catalysts, and conditions to track. Both render in the
-    header embed of the single Discord message.
-    """
-
-    bottom_line: str = Field(min_length=1, max_length=BOTTOM_LINE_MAX_CHARS)
-    watch: list[Annotated[str, Field(min_length=1, max_length=WATCH_ITEM_MAX_CHARS)]] = (
-        Field(default_factory=list, max_length=MAX_WATCH_ITEMS)
-    )
-    items: list[Takeaway] = Field(min_length=3, max_length=3)
 
 
 class TakeawayAnalyzer(Protocol):

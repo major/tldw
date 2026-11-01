@@ -2,10 +2,10 @@
 
 This module owns the LLM seam. ``TakeawayAnalyzer`` is the Protocol the worker
 depends on, and ``OpenAIAnalyzer`` is the production implementation that
-talks to the OpenAI chat completions API through pydantic-ai's
-``OpenAIModel``. Keeping the seam behind a Protocol lets the worker inject a
-fake in tests, and lets pydantic-ai's ``FunctionModel`` exercise the real
-Agent, schema validation, and retry loop fully offline.
+talks to the OpenAI Responses API through pydantic-ai's
+``OpenAIResponsesModel``. Keeping the seam behind a Protocol lets the worker
+inject a fake in tests, and lets pydantic-ai's ``FunctionModel`` exercise the
+real Agent, schema validation, and retry loop fully offline.
 
 The worker renders a transcript and passes the resulting string here. This
 module never reads subtitles and never touches Discord: it turns text into
@@ -23,7 +23,10 @@ from typing import Annotated, Any, Protocol
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
-from pydantic_ai.models import Model
+from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.models import Model, ModelRequestParameters
+from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.settings import ModelSettings
 
 # Lazy imports (PEP 810): ``pydantic_ai.models.openai`` and
 # ``pydantic_ai.providers.openai`` are only used when the production analyzer
@@ -155,6 +158,70 @@ class TakeawayAnalyzer(Protocol):
     ) -> Takeaways: ...
 
 
+class _ResponseLoggingModel(WrapperModel):
+    """Log each nonstreaming response before Agent validation or retries."""
+
+    def __init__(
+        self, wrapped: Model[Any], *, video_id: str, max_output_tokens: int
+    ) -> None:
+        """Keep response numbering and video context local to one analysis."""
+        super().__init__(wrapped)
+        self._video_id = video_id
+        self._max_output_tokens = max_output_tokens
+        self._attempt = 0
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        """Return the unchanged response after logging usage and termination.
+
+        A raised request has no response metadata to report; the worker already
+        logs those failures. SDK-internal transport retries are not counted.
+        """
+        self._attempt += 1
+        response = await self.wrapped.request(
+            messages, model_settings, model_request_parameters
+        )
+        usage = response.usage
+        fraction = (
+            usage.output_tokens / self._max_output_tokens
+            if self._max_output_tokens > 0
+            else None
+        )
+        provider_reason = (response.provider_details or {}).get("finish_reason")
+        level = logging.INFO
+        message = "LLM response"
+        # Usage alone cannot prove truncation, even when it equals the budget.
+        if response.finish_reason == "length" or provider_reason == "max_output_tokens":
+            level = logging.WARNING
+            message = "LLM output token limit reached"
+        elif fraction is not None and fraction >= 0.9:
+            level = logging.WARNING
+            message = "LLM output token usage is near the limit"
+        logger.log(
+            level,
+            message,
+            extra={
+                "event": "llm_response",
+                "video_id": self._video_id,
+                "model": response.model_name or self.wrapped.model_name,
+                "attempt": self._attempt,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                # Reasoning tokens are already included in output_tokens.
+                "reasoning_tokens": usage.details.get("reasoning_tokens"),
+                "max_output_tokens": self._max_output_tokens,
+                "output_budget_fraction": fraction,
+                "finish_reason": response.finish_reason,
+                "provider_finish_reason": provider_reason,
+            },
+        )
+        return response
+
+
 class OpenAIAnalyzer:
     """Production analyzer backed by OpenAI through pydantic-ai."""
 
@@ -212,7 +279,11 @@ class OpenAIAnalyzer:
                 provider=OpenAIProvider(openai_client=client),
             )
             agent = Agent(
-                model,
+                _ResponseLoggingModel(
+                    model,
+                    video_id=video_id,
+                    max_output_tokens=self._settings.llm_max_output_tokens,
+                ),
                 output_type=Takeaways,
                 system_prompt=SYSTEM_PROMPT,
                 # 2.54 spells this ``retries``; it controls output validation

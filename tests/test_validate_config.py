@@ -1,6 +1,7 @@
 """Offline configuration preflight tests."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -146,3 +147,39 @@ def test_queue_topic_references_and_read_only(
         with pytest.raises(SystemExit):
             main(["--queue-file", str(database)])
     assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == before
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_legacy_preflight_rejects_nondefault_backlog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    terminal: bool,
+) -> None:
+    """Unsetting YAML must report blocked videos and terminal-video alerts."""
+    from tldw.validate_config import main
+
+    # Arrange
+    database = tmp_path / "queue.sqlite"
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute(
+            "CREATE TABLE videos (video_id TEXT, terminal_state TEXT, topic_id TEXT)"
+        )
+        db.execute("CREATE TABLE failure_alerts (video_id TEXT, sent_at REAL)")
+        db.execute(
+            "INSERT INTO videos VALUES ('one', ?, 'legal')",
+            ("DONE" if terminal else None,),
+        )
+        if terminal:
+            db.execute("INSERT INTO failure_alerts VALUES ('one', NULL)")
+    before = database.read_bytes()
+    monkeypatch.delenv("TLDW_TOPICS_FILE", raising=False)
+
+    # Act
+    with pytest.raises(SystemExit) as error:
+        main(["--queue-file", str(database)])
+
+    # Assert
+    assert error.value.code == 1
+    assert "nondefault backlog requires topic configuration" in capsys.readouterr().err
+    assert database.read_bytes() == before

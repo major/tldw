@@ -862,6 +862,30 @@ def test_lifespan_starts_transcript_task(tmp_path: Path) -> None:
         assert app.state.transcript_task.done() is False
 
 
+async def test_lifespan_worker_returns_without_openai_key(tmp_path: Path) -> None:
+    """A worker task starts and exits cleanly when the OpenAI key is missing."""
+    # Arrange
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key=None,
+        callback_url=None,
+        audio_dir=tmp_path / "audio",
+    )
+    app = create_app(settings)
+
+    # Act
+    async with app.router.lifespan_context(app):
+        task = app.state.transcript_task
+        assert isinstance(task, asyncio.Task)
+        await asyncio.wait_for(task, timeout=2)
+
+        # Assert
+        assert task.done()
+        assert not task.cancelled()
+        assert not settings.audio_dir.exists()
+
+
 def test_lifespan_skips_transcript_task_without_webhook(tmp_path: Path) -> None:
     """Without a webhook URL there is nothing to send, so no worker task."""
     # Arrange

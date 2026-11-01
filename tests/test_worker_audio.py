@@ -11,6 +11,7 @@ and ``transcript_loop`` is tested for the enqueue delay.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -18,7 +19,6 @@ from typing import Any
 
 import httpx2
 import pytest
-from fastapi import FastAPI
 
 from helpers import (
     counting_sleep,
@@ -26,7 +26,6 @@ from helpers import (
     make_takeaways,
     make_video_entry,
     never_sleep,
-    noop_sleep,
     read_queue_row,
 )
 from tldw import worker
@@ -48,14 +47,6 @@ _VIDEO_ID = "dQw4w9WgXcQ"
 # ---------------------------------------------------------------------------
 # Fixtures and builders
 # ---------------------------------------------------------------------------
-
-
-def _make_app(settings: Settings, queue_store: QueueStore) -> FastAPI:
-    """Build a minimal app carrying the two state attributes the loop reads."""
-    app = FastAPI()
-    app.state.settings = settings
-    app.state.queue = queue_store
-    return app
 
 
 def _fetch(queue_store: QueueStore, now: float) -> QueueRecord:
@@ -299,7 +290,6 @@ async def _run_audio(
         analyze=analyze,
         send=sender,
         send_embeds=embeds_sender,
-        sleep=noop_sleep,
         now=now,
     )
 
@@ -996,20 +986,26 @@ async def test_process_record_audio_uses_audio_settings_for_dest_dir_and_format(
 # ---------------------------------------------------------------------------
 
 
-async def test_transcript_loop_requires_openai_api_key(
-    queue_store: QueueStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("openai_api_key", "webhook"),
+    [(None, "https://discord.com/api/webhooks/x/y"), ("sk-test", None)],
+)
+async def test_transcript_loop_requires_configuration(
+    queue_store: QueueStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    openai_api_key: str | None, webhook: str | None,
 ) -> None:
-    """The worker returns before any work when the OpenAI key is missing."""
+    """The worker returns before work when either credential is missing."""
     # Arrange
     settings = make_settings(
         tmp_path,
-        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        discord_webhook_url=webhook,
         audio_dir=tmp_path / "audio",
-        openai_api_key=None,
+        openai_api_key=openai_api_key,
     )
-    app = _make_app(settings, queue_store)
+    _enqueue(queue_store, time.time() - 1)
 
     async def fake_audio(*args: object, **kwargs: object) -> None:
+        """Fail if the guarded worker attempts to process a record."""
         raise AssertionError("processor should not run")
 
     monkeypatch.setattr(worker, "_process_record_audio", fake_audio)
@@ -1017,10 +1013,71 @@ async def test_transcript_loop_requires_openai_api_key(
     # Act
     # never_sleep raises if the loop reaches a sleep, so a clean return proves
     # the guard fired before the loop started.
-    await transcript_loop(app, httpx2.AsyncClient(), sleep=never_sleep)
+    async with httpx2.AsyncClient() as client:
+        await transcript_loop(settings, queue_store, client, sleep=never_sleep)
 
     # Assert
     assert not (tmp_path / "audio").exists()
+
+
+async def test_transcript_loop_uses_real_compression(
+    queue_store: QueueStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loop forwards audio settings to the default compressor and finishes."""
+    # Arrange
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        openai_api_key="sk-test",
+        audio_dir=tmp_path / "audio",
+        transcript_dir=tmp_path / "transcripts",
+        audio_format="webm",
+        audio_bitrate="24k",
+        ffmpeg_timeout_seconds=123,
+    )
+    _enqueue(queue_store, time.time() - 1)
+    raw = _ready_raw(tmp_path)
+    compressed = settings.audio_dir / f"{_VIDEO_ID}.compressed.webm"
+    download = FakeDownload([DownloadResult(ProbeState.READY, str(raw), None)])
+    embeds = CountingSendEmbeds()
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    delays: list[float] = []
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        """Record the ffmpeg invocation and create its output."""
+        calls.append((argv, kwargs))
+        Path(argv[-1]).write_bytes(b"compressed")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr("tldw.audio.subprocess.run", fake_run)
+
+    # Act
+    async with httpx2.AsyncClient() as client:
+        with pytest.raises(asyncio.CancelledError):
+            await transcript_loop(
+                settings, queue_store, client, download_audio=download,
+                transcribe=FakeTranscribe(transcripts=["hello world"]),
+                analyze=FakeAnalyze(result=make_takeaways(bullet_text="Bullet {i}")),
+                send=CountingSend(), send_embeds=embeds,
+                sleep=counting_sleep(delays, cancel_after=1),
+            )
+
+    # Assert
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert Path(argv[argv.index("-i") + 1]) == raw
+    assert Path(argv[-1]) == compressed
+    assert argv[argv.index("-b:a") + 1] == "24k"
+    assert kwargs["timeout"] == 123
+    assert download.call_count == 1
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
+    assert row["terminal_state"] == "DONE"
+    assert embeds.calls == 1
+    transcript = Path(row["transcript_path"])
+    assert transcript.is_file()
+    assert transcript.read_text() == "hello world"
+    assert not compressed.exists()
+    assert delays == [DEFAULT_RECORD_PACING]
 
 
 async def test_transcript_loop_respects_enqueue_delay(
@@ -1034,7 +1091,6 @@ async def test_transcript_loop_respects_enqueue_delay(
         audio_dir=tmp_path / "audio",
         openai_api_key="sk-test",
     )
-    app = _make_app(settings, queue_store)
     now = time.time()
     queue_store.enqueue(make_video_entry("v1"), now=now, delay_seconds=300.0)
     download = FakeDownload(
@@ -1045,7 +1101,8 @@ async def test_transcript_loop_respects_enqueue_delay(
     # Act
     with pytest.raises(asyncio.CancelledError):
         await transcript_loop(
-            app,
+            settings,
+            queue_store,
             httpx2.AsyncClient(),
             sleep=counting_sleep(delays, cancel_after=1),
             download_audio=download,

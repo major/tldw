@@ -38,7 +38,6 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx2
-from fastapi import FastAPI
 from pydantic import ValidationError
 
 # Lazy imports (PEP 810): ``openai`` exception classes and
@@ -56,8 +55,8 @@ from tldw.audio import (
     DownloadResult,
     ProbeState,
     build_audio_ydl_opts,
-    compress_audio,
 )
+from tldw.audio import compress_audio as audio_compress
 from tldw.audio import download_audio as audio_download
 from tldw.alerts import flush_failure_alert, record_failure
 from tldw.backoff import backoff_delay
@@ -113,17 +112,6 @@ def _default_analyze_factory(settings: Settings) -> AnalyzeFn:
     return _analyze
 
 
-def _default_compress_audio() -> CompressAudioFn:
-    """Bind compress_audio for worker use; closure for the asyncio.to_thread call."""
-
-    def _compress(
-        src: Path, dst: Path, *, bitrate: str = "32k", timeout_s: float = 900.0
-    ) -> Path:
-        return compress_audio(src, dst, bitrate=bitrate, timeout_s=timeout_s)
-
-    return _compress
-
-
 def _default_transcribe_factory(settings: Settings) -> TranscribeFn:
     """Bind transcribe() with settings; the worker injects the seam."""
 
@@ -148,7 +136,8 @@ def _default_transcribe_factory(settings: Settings) -> TranscribeFn:
 
 
 async def transcript_loop(
-    app: FastAPI,
+    settings: Settings,
+    store: QueueStore,
     client: httpx2.AsyncClient,
     *,
     sleep: SleepFn = asyncio.sleep,
@@ -172,7 +161,6 @@ async def transcript_loop(
     ``compress_audio`` are resolved once from settings when not injected, so the
     seams can be faked in tests without touching the network or the filesystem.
     """
-    settings: Settings = app.state.settings
     if not settings.discord_webhook_url:
         logger.info("transcript worker skipping: TLDW_DISCORD_WEBHOOK_URL is not set")
         return
@@ -188,10 +176,10 @@ async def transcript_loop(
     if download_audio is None:
         download_audio = audio_download
     if compress_audio is None:
-        compress_audio = _default_compress_audio()
+        compress_audio = audio_compress
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
     await _run_loop(
-        app,
+        store,
         client,
         settings,
         sleep=sleep,
@@ -205,7 +193,7 @@ async def transcript_loop(
 
 
 async def _run_loop(
-    app: FastAPI,
+    store: QueueStore,
     client: httpx2.AsyncClient,
     settings: Settings,
     *,
@@ -219,13 +207,12 @@ async def _run_loop(
 ) -> None:
     """Run the serial drain loop.
 
-    The store is resolved once from the app state. Each iteration pulls the
-    oldest due record and hands it to ``_process_record_audio`` with the shared
-    seams, then sleeps the per-record pacing. An empty queue sleeps the long
-    empty-queue interval. A per-record exception is logged and the loop moves
-    on, so one bad record can never kill the worker.
+    Each iteration pulls the oldest due record from the supplied store and hands
+    it to ``_process_record_audio`` with the shared seams, then sleeps the
+    per-record pacing. An empty queue sleeps the long empty-queue interval. A
+    per-record exception is logged and the loop moves on, so one bad record can
+    never kill the worker.
     """
-    store: QueueStore = app.state.queue
     next_alert_attempt_at = 0.0
 
     while True:
@@ -249,7 +236,6 @@ async def _run_loop(
                     analyze=analyze,
                     send=send,
                     send_embeds=send_embeds,
-                    sleep=sleep,
                 )
             except Exception:
                 logger.exception("processing raised for %s", record.video_id)
@@ -302,7 +288,6 @@ async def _process_record_audio(
     analyze: AnalyzeFn,
     send: SendFn,
     send_embeds: SendEmbedsFn,
-    sleep: SleepFn,
     now: float | None = None,
 ) -> None:
     """Process one record through the audio pipeline.
@@ -326,9 +311,7 @@ async def _process_record_audio(
 
     Each stage's success is persisted before the next stage runs, so a crash
     resumes at the last completed artifact. ``now`` is the clock seam for tests
-    and defaults to ``time.time()``. ``sleep`` is accepted for symmetry with
-    the other seams and so future per-step pacing can use it without a
-    signature change.
+    and defaults to ``time.time()``.
     """
     if now is None:
         now = time.time()

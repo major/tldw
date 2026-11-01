@@ -7,7 +7,6 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from fastapi import FastAPI
 
 from helpers import make_capturing_transport, make_settings, make_video_entry
 from tldw import alerts, worker
@@ -126,8 +125,6 @@ async def test_worker_alert_failure_cools_down(
     """A failed notification is not retried during the 60-second cooldown."""
     # Arrange
     settings = make_settings(tmp_path, discord_alert_user_id=USER)
-    app = FastAPI()
-    app.state.queue = queue_store
     clock = [100.0]
     attempts: list[float] = []
     sleeps = 0
@@ -151,7 +148,7 @@ async def test_worker_alert_failure_cools_down(
     async with httpx2.AsyncClient() as client:
         with pytest.raises(asyncio.CancelledError):
             await worker._run_loop(
-                app,
+                queue_store,
                 client,
                 settings,
                 sleep=advance,
@@ -241,8 +238,6 @@ async def test_failed_delivery_then_idle_worker_flush(
     transport = make_capturing_transport(
         requests, [httpx2.Response(500), httpx2.Response(204)]
     )
-    app = FastAPI()
-    app.state.queue = queue_store
 
     async def stop(_delay: float) -> None:
         """Stop after the idle iteration without waiting."""
@@ -255,7 +250,7 @@ async def test_failed_delivery_then_idle_worker_flush(
         assert queue_store.next_failure_alert() is not None
         with pytest.raises(asyncio.CancelledError):
             await worker._run_loop(
-                app,
+                queue_store,
                 client,
                 settings,
                 sleep=stop,

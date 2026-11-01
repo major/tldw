@@ -61,6 +61,8 @@ spec:
             # notifications are still enqueued for a later restart.
             - name: TLDW_DISCORD_WEBHOOK_URL
               value: ""
+            - name: TLDW_DISCORD_ALERT_USER_ID
+              value: "559804419261071363"
             # LLM takeaway settings. The API key must come from a Secret in
             # production so it is not exposed in the pod spec. The base URL
             # and model default to public OpenAI when unset, so they are

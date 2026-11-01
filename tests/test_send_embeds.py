@@ -66,7 +66,7 @@ async def test_send_embeds_posts_all_embeds_in_one_request() -> None:
     # Assert
     assert len(captured) == 1
     body = json.loads(captured[0].content.decode("utf-8"))
-    assert body == {"embeds": embeds}
+    assert body == {"embeds": embeds, "allowed_mentions": {"parse": []}}
 
 
 async def test_send_embeds_posts_to_webhook_url_with_wait_true() -> None:
@@ -143,4 +143,4 @@ async def test_send_still_posts_content_body() -> None:
 
     assert len(captured) == 1
     body = json.loads(captured[0].content.decode("utf-8"))
-    assert body == {"content": "hello"}
+    assert body == {"content": "hello", "allowed_mentions": {"parse": []}}

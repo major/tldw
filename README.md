@@ -45,6 +45,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_CHANNEL_IDS` | No | unset | CSV override for the channel list |
 | `TLDW_HUB_SECRET` | No | unset | HMAC secret for signing deliveries. When set, every incoming notification must carry a matching `X-Hub-Signature: sha1=...` header |
 | `TLDW_DISCORD_WEBHOOK_URL` | No | unset | Webhook URL for transcript-to-Discord delivery. When unset, the transcript worker does not run; videos are enqueued but nothing is downloaded or sent |
+| `TLDW_DISCORD_ALERT_USER_ID` | No | unset | Discord user snowflake (17 to 20 digits) to mention for video pipeline failures |
 | `TLDW_QUEUE_FILE` | No | `queue.sqlite3` | Path to the SQLite queue database. Persist this directory in container deployments |
 | `TLDW_TRANSCRIPT_DIR` | No | `transcripts` | Directory where the audio pipeline caches its `.txt` transcripts |
 | `TLDW_TRANSCRIPT_LINES` | No | `10` | How many transcript lines to include in each Discord message |
@@ -74,6 +75,8 @@ The file is gitignored-by-convention. Do not commit it if you have private chann
 ### What happens when no webhook is configured
 
 When `TLDW_DISCORD_WEBHOOK_URL` is unset, the lifespan does not start the transcript worker at all. Videos are still enqueued (so the hub is acknowledged and the queue is durable), but nothing is downloaded and nothing is sent. Set the webhook URL and restart the service to drain the backlog; the queue survives the restart because of the WAL SQLite store.
+
+Set `TLDW_DISCORD_ALERT_USER_ID` to opt in to operational failure alerts in the same channel as summaries, using the same webhook. The SQLite queue persists the first failure per video and stage, including across restarts; existing terminal videos are not backfilled. Delivery is at least once, so a crash after Discord accepts an alert can rarely cause a duplicate. A Discord outage cannot be reported to Discord until it recovers. Startup configuration failures, including a missing API key, are not monitored by these alerts. Unset the ID to disable alert creation and delivery without disabling summaries.
 
 ### Persistent storage
 

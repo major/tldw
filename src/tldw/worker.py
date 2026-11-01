@@ -52,6 +52,7 @@ lazy import openai
 lazy import pydantic_ai.exceptions
 
 from tldw.audio import (
+    CompressError,
     DownloadResult,
     ProbeState,
     build_audio_ydl_opts,
@@ -618,7 +619,7 @@ async def _compress_stage(
             bitrate=settings.audio_bitrate,
             timeout_s=settings.ffmpeg_timeout_seconds,
         )
-    except Exception:
+    except CompressError:
         logger.exception("compress failed for %s", record.video_id)
         record_failure(
             settings,

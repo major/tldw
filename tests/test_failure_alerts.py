@@ -29,6 +29,7 @@ USER = "559804419261071363"
 
 def test_outbox_keeps_first_failure_across_reopen(tmp_path: Path) -> None:
     """Only the first failure per stage is stored, including after restart."""
+    # Arrange
     path = tmp_path / "queue.db"
     store = QueueStore(path)
     store.enqueue(make_video_entry("video1"), now=1)
@@ -40,8 +41,129 @@ def test_outbox_keeps_first_failure_across_reopen(tmp_path: Path) -> None:
     assert alert is not None
     assert (alert.reason, alert.retrying) == ("first", True)
     store.mark_failure_alert_sent(alert.video_id, alert.stage, now=4)
+    # Act
+    store.enqueue_failure_alert("video1", "download", "third", True, now=5)
+    store.close()
+    store = QueueStore(path)
+    # Assert
     assert store.next_failure_alert() is None
     store.close()
+
+
+@pytest.mark.parametrize(
+    ("state", "detail", "expected"),
+    [
+        (TerminalState.DONE, None, "Video summary delivered successfully."),
+        (
+            TerminalState.DONE,
+            "llm_fallback",
+            "Delivered using a plain transcript fallback.",
+        ),
+        (TerminalState.GIVE_UP_AUDIO, None, "Stopped; no automatic retry."),
+        (None, None, "Video remains queued for processing."),
+    ],
+)
+async def test_delayed_alert_reports_current_outcome(
+    tmp_path: Path,
+    queue_store: QueueStore,
+    state: TerminalState | None,
+    detail: str | None,
+    expected: str,
+) -> None:
+    """Delayed alerts distinguish the failure time from the current outcome."""
+    # Arrange
+    settings = make_settings(
+        tmp_path,
+        discord_alert_user_id=USER,
+        discord_webhook_url="https://discord.test/hook",
+    )
+    queue_store.enqueue(make_video_entry("video1"), now=1)
+    queue_store.enqueue_failure_alert("video1", "analysis", "Failed.", True, now=2)
+    if state is not None:
+        queue_store.mark_terminal("video1", state, detail=detail)
+    requests: list[httpx2.Request] = []
+    transport = make_capturing_transport(requests, [httpx2.Response(204)])
+    # Act
+    async with httpx2.AsyncClient(transport=transport) as client:
+        assert await alerts.flush_failure_alert(settings, queue_store, client)
+    # Assert
+    content = json.loads(requests[0].content)["content"]
+    assert "1970-01-01 00:00:02 UTC" in content
+    assert expected in content
+    assert "Automatic retry scheduled" not in content
+    assert "Requires attention" not in content
+    assert len(content) <= 2000
+
+
+async def test_cancelled_alert_delivery_remains_pending(
+    tmp_path: Path, queue_store: QueueStore
+) -> None:
+    """Cancellation during HTTP delivery leaves the alert pending."""
+    # Arrange
+    settings = make_settings(
+        tmp_path,
+        discord_alert_user_id=USER,
+        discord_webhook_url="https://discord.test/hook",
+    )
+    queue_store.enqueue(make_video_entry("video1"), now=1)
+    queue_store.enqueue_failure_alert("video1", "download", "Failed.", True, now=2)
+
+    async def cancel(_request: httpx2.Request) -> httpx2.Response:
+        """Cancel the in-flight request immediately."""
+        raise asyncio.CancelledError
+
+    # Act
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(cancel)) as client:
+        with pytest.raises(asyncio.CancelledError):
+            await alerts.flush_failure_alert(settings, queue_store, client)
+    # Assert
+    assert queue_store.next_failure_alert() is not None
+
+
+async def test_worker_alert_failure_cools_down(
+    tmp_path: Path, queue_store: QueueStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed notification is not retried during the 60-second cooldown."""
+    # Arrange
+    settings = make_settings(tmp_path, discord_alert_user_id=USER)
+    app = FastAPI()
+    app.state.queue = queue_store
+    clock = [100.0]
+    attempts: list[float] = []
+    sleeps = 0
+
+    async def fail(*args: object, **kwargs: object) -> bool:
+        """Record a failed alert attempt."""
+        attempts.append(clock[0])
+        return False
+
+    async def advance(_delay: float) -> None:
+        """Advance without waiting and stop after two iterations."""
+        nonlocal sleeps
+        sleeps += 1
+        clock[0] += 59
+        if sleeps == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker, "flush_failure_alert", fail)
+    monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
+    # Act
+    async with httpx2.AsyncClient() as client:
+        with pytest.raises(asyncio.CancelledError):
+            await worker._run_loop(
+                app,
+                client,
+                settings,
+                sleep=advance,
+                download_audio=FakeDownload([]),
+                compress_audio=FakeCompress(),
+                transcribe=FakeTranscribe(),
+                analyze=FakeAnalyze(),
+                send=CountingSend(),
+                send_embeds=CountingSendEmbeds(),
+            )
+    # Assert
+    assert attempts == [100.0]
 
 
 def test_existing_database_gains_empty_outbox(tmp_path: Path) -> None:

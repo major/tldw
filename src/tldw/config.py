@@ -86,7 +86,9 @@ class Settings(BaseSettings):
     channel_ids_file: Path = Field(
         default=Path("channels.json"), alias="TLDW_CHANNELS_FILE"
     )
-    channel_ids_env_override: str | None = Field(default=None, alias="TLDW_CHANNEL_IDS")
+    channel_ids_env_override: str | None = Field(
+        default=None, alias="TLDW_CHANNEL_IDS"
+    )
     hub_secret: str | None = None
 
     # Discord webhook delivery.

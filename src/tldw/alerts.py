@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 
 import httpx2
 
@@ -45,15 +46,26 @@ async def flush_failure_alert(
         alert = store.next_failure_alert()
         if alert is None:
             return True
-        disposition = (
-            "Automatic retry scheduled."
-            if alert.retrying
-            else "Requires attention; no automatic retry."
+        if alert.current_terminal_state == "DONE":
+            disposition = (
+                "Delivered using a plain transcript fallback."
+                if alert.current_detail == "llm_fallback"
+                else "Video summary delivered successfully."
+            )
+        elif alert.current_terminal_state and alert.current_terminal_state.startswith(
+            "GIVE_UP"
+        ):
+            disposition = "Stopped; no automatic retry."
+        else:
+            disposition = "Video remains queued for processing."
+        failure_time = datetime.fromtimestamp(alert.created_at, UTC).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
         )
         content = (
             f"Video: {alert.title[:300]}\nChannel: {alert.channel_name[:200]}\n"
-            f"URL: {alert.url[:800]}\nStage: {alert.stage[:100]}\n"
-            f"Reason: {alert.reason[:300]}\n{disposition}"
+            f"URL: {alert.url[:700]}\nStage: {alert.stage[:100]}\n"
+            f"Failure time: {failure_time}\nReason: {alert.reason[:300]}\n"
+            f"Current status: {disposition}"
         )
         await asyncio.wait_for(
             discord.send_alert(

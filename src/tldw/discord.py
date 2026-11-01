@@ -296,9 +296,7 @@ def build_takeaway_embed(
     header. Only the header embed links to the video.
     """
     bullets_md = "\n".join(_format_bullet(b, video_id) for b in takeaway.bullets)
-    description = (
-        f"{takeaway.summary}\n\n{bullets_md}" if bullets_md else takeaway.summary
-    )
+    description = f"{takeaway.summary}\n\n{bullets_md}" if bullets_md else takeaway.summary
     return {
         "title": _truncate(f"{index}. {takeaway.title}", _EMBED_TITLE_MAX_CHARS),
         "description": _truncate(description, _EMBED_DESCRIPTION_MAX_CHARS),

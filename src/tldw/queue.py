@@ -144,6 +144,9 @@ class FailureAlert:
     title: str
     channel_name: str
     url: str
+    created_at: float
+    current_terminal_state: str | None
+    current_detail: str | None
 
 
 class QueueStore:
@@ -416,7 +419,8 @@ class QueueStore:
         """Return the oldest unsent alert and its video metadata."""
         self._ensure_open()
         row = self._conn.execute(
-            "SELECT a.video_id, a.stage, a.reason, a.retrying, v.title, v.channel_name, v.url "
+            "SELECT a.video_id, a.stage, a.reason, a.retrying, v.title, v.channel_name, v.url, "
+            "a.created_at, v.terminal_state, v.detail "
             "FROM failure_alerts a JOIN videos v ON v.video_id = a.video_id "
             "WHERE a.sent_at IS NULL ORDER BY a.created_at, a.rowid LIMIT 1"
         ).fetchone()
@@ -430,6 +434,9 @@ class QueueStore:
             row["title"],
             row["channel_name"],
             row["url"],
+            row["created_at"],
+            row["terminal_state"],
+            row["detail"],
         )
 
     def mark_failure_alert_sent(

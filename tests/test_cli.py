@@ -79,6 +79,41 @@ def test_json_formatter_renders_one_line(
     }
 
 
+@pytest.mark.parametrize(
+    ("message", "args", "color_message"),
+    [
+        (
+            "Started server process [%d]",
+            (1,),
+            "Started server process [\x1b[36m%d\x1b[0m]",
+        ),
+        (
+            "Uvicorn running on %s://%s:%d (Press CTRL+C to quit)",
+            ("http", "0.0.0.0", 8000),
+            "Uvicorn running on \x1b[1m%s://%s:%d\x1b[0m (Press CTRL+C to quit)",
+        ),
+    ],
+)
+def test_json_formatter_omits_uvicorn_color_template(
+    message: str, args: tuple[object, ...], color_message: str
+) -> None:
+    """Uvicorn's console template stays out of JSON without changing the record."""
+    # Arrange
+    record = make_log_record(message, name="uvicorn.error", args=args)
+    record.__dict__.update(color_message=color_message, server="main")
+    original = record.__dict__.copy()
+
+    # Act
+    fields = json.loads(cli._JSONFormatter().format(record))
+
+    # Assert
+    assert fields["msg"] == message % args
+    assert fields["server"] == "main"
+    assert "color_message" not in fields
+    assert all("\x1b" not in value for value in fields.values() if isinstance(value, str))
+    assert record.__dict__ == original
+
+
 def test_json_formatter_includes_extras_without_overwriting_core_fields() -> None:
     """Extras stay structured and fields from earlier formatters stay hidden."""
     # Arrange

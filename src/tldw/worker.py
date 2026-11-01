@@ -67,6 +67,7 @@ from tldw.discord import send_embeds as discord_send_embeds
 from tldw.llm import OpenAIAnalyzer, TakeawayAnalyzer, Takeaways
 from tldw.queue import QueueRecord, QueueStore, TerminalState
 from tldw.transcribe import TranscribeError, build_prompt, transcribe
+from tldw.topics import TopicRegistry
 
 __all__ = ["transcript_loop"]
 
@@ -102,9 +103,15 @@ transcription prompt can be built from the entry metadata. Tests inject
 fakes via the same shape."""
 
 
-def _default_analyze_factory(settings: Settings) -> AnalyzeFn:
+def _default_analyze_factory(
+    settings: Settings, *, system_prompt: str | None = None
+) -> AnalyzeFn:
     """Build the production analyzer from settings. Returns a closure."""
-    analyzer: TakeawayAnalyzer = OpenAIAnalyzer(settings)
+    analyzer: TakeawayAnalyzer = (
+        OpenAIAnalyzer(settings)
+        if system_prompt is None
+        else OpenAIAnalyzer(settings, system_prompt=system_prompt)
+    )
 
     async def _analyze(rendered: str, video_id: str, title: str) -> Takeaways:
         return await analyzer.analyze(rendered, video_id=video_id, title=title)
@@ -147,6 +154,7 @@ async def transcript_loop(
     download_audio: DownloadAudioFn | None = None,
     compress_audio: CompressAudioFn | None = None,
     transcribe: TranscribeFn | None = None,
+    registry: TopicRegistry | None = None,
 ) -> None:
     """Drain the queue forever, one record at a time, until cancelled.
 
@@ -161,7 +169,11 @@ async def transcript_loop(
     ``compress_audio`` are resolved once from settings when not injected, so the
     seams can be faked in tests without touching the network or the filesystem.
     """
-    if not settings.discord_webhook_url:
+    if not (
+        any(t.webhook_url for t in registry.topics.values())
+        if registry is not None
+        else settings.discord_webhook_url
+    ):
         logger.info("transcript worker skipping: TLDW_DISCORD_WEBHOOK_URL is not set")
         return
     # The audio backend has no plain-digest fallback without a key: without it,
@@ -169,8 +181,19 @@ async def transcript_loop(
     if not settings.openai_api_key:
         logger.error("audio backend requires TLDW_OPENAI_API_KEY; worker not starting")
         return
+    analyzers: dict[str, AnalyzeFn] | None = None
     if analyze is None:
-        analyze = _default_analyze_factory(settings)
+        if registry is None:
+            analyze = _default_analyze_factory(settings)
+        else:
+            analyzers = {
+                key: _default_analyze_factory(
+                    settings, system_prompt=topic.system_prompt
+                )
+                for key, topic in registry.topics.items()
+                if topic.webhook_url
+            }
+            analyze = next(iter(analyzers.values()))
     if transcribe is None:
         transcribe = _default_transcribe_factory(settings)
     if download_audio is None:
@@ -189,6 +212,8 @@ async def transcript_loop(
         analyze=analyze,
         send=send,
         send_embeds=send_embeds,
+        registry=registry,
+        analyzers=analyzers,
     )
 
 
@@ -204,6 +229,8 @@ async def _run_loop(
     analyze: AnalyzeFn,
     send: SendFn,
     send_embeds: SendEmbedsFn,
+    registry: TopicRegistry | None = None,
+    analyzers: dict[str, AnalyzeFn] | None = None,
 ) -> None:
     """Run the serial drain loop.
 
@@ -214,10 +241,16 @@ async def _run_loop(
     never kill the worker.
     """
     next_alert_attempt_at = 0.0
+    cooldowns: dict[str, float] = {}
+    drainable = (
+        tuple(key for key, topic in registry.topics.items() if topic.webhook_url)
+        if registry is not None
+        else ("default",)
+    )
 
     while True:
         try:
-            record = store.next_due()
+            record = store.next_due(topic_ids=drainable)
         except Exception:
             logger.exception("queue next_due raised")
             await sleep(DEFAULT_EMPTY_QUEUE_SLEEP)
@@ -225,20 +258,36 @@ async def _run_loop(
 
         if record is not None:
             try:
+                record_settings = settings
+                if registry is not None:
+                    record_settings = settings.model_copy(
+                        update={
+                            "discord_webhook_url": registry.topics[
+                                record.topic_id
+                            ].webhook_url
+                        }
+                    )
                 await _process_record_audio(
                     record,
-                    settings,
+                    record_settings,
                     store,
                     client,
                     download_audio=download_audio,
                     compress_audio=compress_audio,
                     transcribe=transcribe,
-                    analyze=analyze,
+                    analyze=analyzers[record.topic_id]
+                    if analyzers is not None
+                    else analyze,
                     send=send,
                     send_embeds=send_embeds,
                 )
-            except Exception:
-                logger.exception("processing raised for %s", record.video_id)
+            except Exception as exc:
+                logger.warning(
+                    "processing raised: video=%s topic=%s error=%s",
+                    record.video_id,
+                    record.topic_id,
+                    type(exc).__name__,
+                )
                 record_failure(
                     settings,
                     store,
@@ -247,7 +296,11 @@ async def _run_loop(
                     "Video processing failed.",
                     True,
                 )
-        if time.monotonic() >= next_alert_attempt_at:
+        if registry is not None:
+            await flush_failure_alert(
+                settings, store, client, registry=registry, cooldowns=cooldowns
+            )
+        elif time.monotonic() >= next_alert_attempt_at:
             if not await flush_failure_alert(settings, store, client):
                 next_alert_attempt_at = time.monotonic() + 60.0
         await sleep(
@@ -885,8 +938,8 @@ async def _llm_and_send_stage(
             )
             return
         await _send_plain(detail=None)
-    except Exception:
-        logger.exception("send raised for %s", record.video_id)
+    except Exception as exc:
+        logger.warning("send raised for %s: %s", record.video_id, type(exc).__name__)
         record_failure(
             settings,
             store,

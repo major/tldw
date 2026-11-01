@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from collections.abc import Collection
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -70,7 +71,8 @@ CREATE TABLE IF NOT EXISTS videos (
     audio_path      TEXT,
     terminal_state  TEXT,
     detail          TEXT,
-    rate_limit_streak INTEGER NOT NULL DEFAULT 0
+    rate_limit_streak INTEGER NOT NULL DEFAULT 0,
+    topic_id TEXT NOT NULL DEFAULT 'default'
 );
 CREATE INDEX IF NOT EXISTS idx_due
     ON videos(next_attempt_at)
@@ -131,6 +133,7 @@ class QueueRecord:
     terminal_state: TerminalState | None
     detail: str | None
     rate_limit_streak: int
+    topic_id: str = "default"
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +150,7 @@ class FailureAlert:
     created_at: float
     current_terminal_state: str | None
     current_detail: str | None
+    topic_id: str = "default"
 
 
 class QueueStore:
@@ -178,6 +182,13 @@ class QueueStore:
                 # The column already exists on a database created with the
                 # current schema; nothing to migrate.
                 pass
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(videos)")
+        }
+        if "topic_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE videos ADD COLUMN topic_id TEXT NOT NULL DEFAULT 'default'"
+            )
         self._conn.commit()
 
     def _ensure_open(self) -> None:
@@ -218,6 +229,7 @@ class QueueStore:
             # The column always exists: __init__ creates the table with it and
             # migrates older databases before any row is read.
             rate_limit_streak=int(row["rate_limit_streak"]),
+            topic_id=row["topic_id"],
         )
 
     def enqueue(
@@ -226,6 +238,7 @@ class QueueStore:
         *,
         now: float | None = None,
         delay_seconds: float = 0.0,
+        topic_id: str = "default",
     ) -> bool:
         """Insert ``entry`` by video_id; return True on insert, False if seen.
 
@@ -244,8 +257,8 @@ class QueueStore:
         cursor = self._conn.execute(
             "INSERT OR IGNORE INTO videos "
             "(video_id, url, channel_id, channel_name, title, published, "
-            " enqueued_at, attempts, next_attempt_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            " enqueued_at, attempts, next_attempt_at, topic_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
             (
                 entry.video_id,
                 entry.url,
@@ -255,21 +268,32 @@ class QueueStore:
                 entry.published,
                 now,
                 now + delay_seconds,
+                topic_id,
             ),
         )
         self._conn.commit()
         return cursor.rowcount > 0
 
-    def next_due(self, now: float | None = None) -> QueueRecord | None:
+    def next_due(
+        self, now: float | None = None, *, topic_ids: Collection[str] | None = None
+    ) -> QueueRecord | None:
         """Return the oldest pending record due at or before ``now``, else None."""
         self._ensure_open()
         if now is None:
             now = time.time()
+        if topic_ids is not None and not topic_ids:
+            return None
+        topic_filter = (
+            ""
+            if topic_ids is None
+            else (" AND topic_id IN (" + ",".join("?" for _ in topic_ids) + ")")
+        )
         row = self._conn.execute(
             "SELECT * FROM videos "
             "WHERE terminal_state IS NULL AND next_attempt_at <= ? "
-            "ORDER BY next_attempt_at LIMIT 1",
-            (now,),
+            + topic_filter
+            + " ORDER BY next_attempt_at LIMIT 1",
+            (now, *(topic_ids or ())),
         ).fetchone()
         if row is None:
             return None
@@ -415,14 +439,26 @@ class QueueStore:
         )
         self._conn.commit()
 
-    def next_failure_alert(self) -> FailureAlert | None:
+    def next_failure_alert(
+        self, *, topic_ids: Collection[str] | None = None
+    ) -> FailureAlert | None:
         """Return the oldest unsent alert and its video metadata."""
         self._ensure_open()
+        if topic_ids is not None and not topic_ids:
+            return None
+        topic_filter = (
+            ""
+            if topic_ids is None
+            else (" AND v.topic_id IN (" + ",".join("?" for _ in topic_ids) + ")")
+        )
         row = self._conn.execute(
             "SELECT a.video_id, a.stage, a.reason, a.retrying, v.title, v.channel_name, v.url, "
-            "a.created_at, v.terminal_state, v.detail "
+            "a.created_at, v.terminal_state, v.detail, v.topic_id "
             "FROM failure_alerts a JOIN videos v ON v.video_id = a.video_id "
-            "WHERE a.sent_at IS NULL ORDER BY a.created_at, a.rowid LIMIT 1"
+            "WHERE a.sent_at IS NULL"
+            + topic_filter
+            + " ORDER BY a.created_at, a.rowid LIMIT 1",
+            tuple(topic_ids or ()),
         ).fetchone()
         if row is None:
             return None
@@ -437,7 +473,21 @@ class QueueStore:
             row["created_at"],
             row["terminal_state"],
             row["detail"],
+            row["topic_id"],
         )
+
+    def routing_counts(self) -> dict[str, tuple[int, int]]:
+        """Return pending video and unsent alert counts by saved topic."""
+        self._ensure_open()
+        rows = self._conn.execute(
+            "SELECT topic_id, SUM(pending) AS pending, SUM(alerts) AS alerts FROM ("
+            "SELECT topic_id, COUNT(*) AS pending, 0 AS alerts FROM videos "
+            "WHERE terminal_state IS NULL GROUP BY topic_id UNION ALL "
+            "SELECT v.topic_id, 0, COUNT(*) FROM failure_alerts a "
+            "JOIN videos v ON v.video_id = a.video_id WHERE a.sent_at IS NULL "
+            "GROUP BY v.topic_id) GROUP BY topic_id"
+        ).fetchall()
+        return {row["topic_id"]: (row["pending"], row["alerts"]) for row in rows}
 
     def mark_failure_alert_sent(
         self, video_id: str, stage: str, *, now: float | None = None

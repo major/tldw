@@ -40,6 +40,7 @@ from tldw import worker as tldw_worker
 from tldw.config import Settings
 from tldw.feed import VideoEntry, is_short_url, parse_atom
 from tldw.renderer import format_video_line
+from tldw.topics import TopicRegistry, load_topics
 
 __all__ = ["create_app", "renewal_delay"]
 
@@ -81,7 +82,12 @@ async def _subscribe_resolved_channels(
     if not settings.callback_url:
         logger.info("skipping subscribe: TLDW_CALLBACK_URL is not set")
         return
-    channel_ids = tldw_config.resolve_channel_ids(settings)
+    topics: TopicRegistry | None = getattr(app.state, "topics", None)
+    channel_ids = (
+        topics.channel_ids
+        if topics is not None
+        else tldw_config.resolve_channel_ids(settings)
+    )
     if not channel_ids:
         logger.info("skipping subscribe: no channel ids resolved")
         return
@@ -130,7 +136,12 @@ async def _renewal_loop(
     settings: Settings = app.state.settings
     if not settings.callback_url:
         return
-    channel_ids = tldw_config.resolve_channel_ids(settings)
+    topics: TopicRegistry | None = getattr(app.state, "topics", None)
+    channel_ids = (
+        topics.channel_ids
+        if topics is not None
+        else tldw_config.resolve_channel_ids(settings)
+    )
     if not channel_ids:
         return
     delay = renewal_delay(tldw_hub.DEFAULT_LEASE_SECONDS)
@@ -212,9 +223,20 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         """Open the queue, subscribe, run the tasks, and clean up on exit."""
+        settings: Settings = app.state.settings
+        if settings.topics_file is not None:
+            if any(
+                part.strip()
+                for part in (settings.channel_ids_env_override or "").split(",")
+            ):
+                raise ValueError(
+                    "topics file cannot be combined with channel IDs override"
+                )
+            app.state.topics = load_topics(settings.topics_file)
+        else:
+            app.state.topics = None
         async with httpx2.AsyncClient(transport=transport) as client:
             app.state.http_client = client
-            settings: Settings = app.state.settings
             settings.transcript_dir.mkdir(parents=True, exist_ok=True)
             try:
                 app.state.queue = tldw_queue.open_store(settings.queue_file)
@@ -226,9 +248,28 @@ def create_app(
                     settings.queue_file,
                 )
                 app.state.queue = None
+            topics: TopicRegistry | None = app.state.topics
+            if app.state.queue is not None:
+                drainable = (
+                    {key for key, topic in topics.topics.items() if topic.webhook_url}
+                    if topics is not None
+                    else ({"default"} if settings.discord_webhook_url else set())
+                )
+                for topic_id, counts in app.state.queue.routing_counts().items():
+                    if topic_id not in drainable:
+                        logger.warning(
+                            "unroutable backlog topic=%s pending=%d alerts=%d",
+                            topic_id,
+                            *counts,
+                        )
             await _subscribe_resolved_channels(app, client)
             app.state.renewal_task = asyncio.create_task(_renewal_loop(app, client))
-            if app.state.queue is None or not settings.discord_webhook_url:
+            has_destination = (
+                any(topic.webhook_url for topic in topics.topics.values())
+                if topics is not None
+                else bool(settings.discord_webhook_url)
+            )
+            if app.state.queue is None or not has_destination:
                 # No queue or no usable webhook means the worker has nothing to
                 # drain or nowhere to send; skip the task entirely. The
                 # falsy check also catches an empty string, which is what the
@@ -236,7 +277,9 @@ def create_app(
                 app.state.transcript_task = None
             else:
                 app.state.transcript_task = asyncio.create_task(
-                    tldw_worker.transcript_loop(settings, app.state.queue, client)
+                    tldw_worker.transcript_loop(
+                        settings, app.state.queue, client, registry=topics
+                    )
                 )
             try:
                 yield
@@ -254,6 +297,7 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
+    app.state.topics = None
 
     @app.get("/version")
     async def version() -> dict[str, str]:
@@ -345,7 +389,20 @@ def create_app(
         # A removed channel keeps arriving until the hub lease expires, which can
         # take up to five days. Drop entries from channels that are no longer in
         # the configured list so they are not processed.
-        entries = _filter_known_channels(entries, settings)
+        topics: TopicRegistry | None = app.state.topics
+        if topics is None:
+            entries = _filter_known_channels(entries, settings)
+        else:
+            dropped = [
+                entry for entry in entries if entry.channel_id not in topics.by_channel
+            ]
+            if dropped:
+                logger.info(
+                    "filtered unknown or disabled channels: dropped=%d", len(dropped)
+                )
+            entries = [
+                entry for entry in entries if entry.channel_id in topics.by_channel
+            ]
 
         store = getattr(app.state, "queue", None)
         for entry in entries:
@@ -358,6 +415,9 @@ def create_app(
                     inserted = store.enqueue(
                         entry,
                         delay_seconds=settings.audio_download_delay_seconds,
+                        topic_id=topics.by_channel[entry.channel_id].topic_id
+                        if topics
+                        else "default",
                     )
                 except Exception:
                     # Best effort: the hub already got its 200, so a queue

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextvars import ContextVar
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -38,6 +39,19 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+_webhook_request: ContextVar[bool] = ContextVar("webhook_request", default=False)
+
+
+class _WebhookLogFilter(logging.Filter):
+    """Suppress HTTP client request logs while sending secret webhook URLs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Keep unrelated HTTP logs from other tasks."""
+        return not _webhook_request.get()
+
+
+logging.getLogger("httpx2").addFilter(_WebhookLogFilter())
 
 # Discord's hard limit per message.
 DEFAULT_MAX_CHARS: int = 2000
@@ -158,7 +172,11 @@ async def _post_payload(
     attempts = 0
     while True:
         attempts += 1
-        response = await client.post(url, json=payload)
+        token = _webhook_request.set(True)
+        try:
+            response = await client.post(url, json=payload)
+        finally:
+            _webhook_request.reset(token)
         try:
             response.raise_for_status()
         except httpx2.HTTPStatusError as exc:

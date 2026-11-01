@@ -11,6 +11,7 @@ does not pollute pytest output.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -162,6 +163,37 @@ def test_takeaways_rejects_more_than_max_watch_items() -> None:
 # ---------------------------------------------------------------------------
 # OpenAIAnalyzer: Agent runs against FunctionModel
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("override", [None, "Custom prompt"])
+async def test_analyzer_system_prompt(override: str | None) -> None:
+    """Keep the trading prompt exact and forward the selected prompt to the agent."""
+    # Arrange
+    from pydantic_ai.messages import SystemPromptPart
+
+    captured: list[str] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Capture system prompts and return a valid response."""
+        captured.extend(
+            part.content
+            for msg in messages
+            for part in msg.parts
+            if isinstance(part, SystemPromptPart)
+        )
+        return ModelResponse(parts=[TextPart(content=json.dumps(_valid_payload()))])
+
+    kwargs = {} if override is None else {"system_prompt": override}
+    analyzer = OpenAIAnalyzer(
+        make_settings(openai_api_key="test-key"), model=_function_model(respond), **kwargs
+    )
+    # Act
+    await analyzer.analyze("transcript", video_id="v", title="title")
+    # Assert
+    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == (
+        "910c538d53ebaeb3f9ecb616443730e7ddc4643d723142fbed548d606712fda5"
+    )
+    assert captured == [override or SYSTEM_PROMPT]
 
 
 async def test_openai_analyzer_returns_canned_takeaways() -> None:

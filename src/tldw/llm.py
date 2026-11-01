@@ -188,10 +188,12 @@ class OpenAIAnalyzer:
         settings: Settings,
         *,
         model: Model[Any] | None = None,
+        system_prompt: str = SYSTEM_PROMPT,
     ) -> None:
         """Store settings and an optional model override used by tests."""
         self._settings = settings
         self._model_override = model
+        self._system_prompt = system_prompt
 
     def _build_client(self) -> AsyncOpenAI:
         """Build an ``AsyncOpenAI`` client from the configured credentials.
@@ -243,7 +245,7 @@ class OpenAIAnalyzer:
                     max_output_tokens=self._settings.llm_max_output_tokens,
                 ),
                 output_type=Takeaways,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=self._system_prompt,
                 # 2.54 spells this ``retries``; it controls output validation
                 # retries (there is no ``output_retries`` kwarg in this version).
                 retries=DEFAULT_OUTPUT_RETRIES,

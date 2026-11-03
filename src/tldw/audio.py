@@ -85,13 +85,14 @@ class ProbeState(StrEnum):
     """Outcome of one download, from the worker's point of view.
 
     READY, NOT_READY, and RATE_LIMITED are all retryable in their own way, while
-    UNAVAILABLE is permanent. The worker maps these onto queue terminal states.
+    UNAVAILABLE is permanent, and SKIPPED_LIVE is a normal terminal skip.
     """
 
     READY = "READY"  # media file written
     NOT_READY = "NOT_READY"  # no media; either pending or never (worker decides)
     UNAVAILABLE = "UNAVAILABLE"  # video private/removed/bot-checked/forbidden; permanent
     RATE_LIMITED = "RATE_LIMITED"  # HTTP 429; transient
+    SKIPPED_LIVE = "SKIPPED_LIVE"  # excluded by content policy
 
 
 # HTTP 403 from the media server is bot-checked traffic: the cluster egress IP
@@ -136,6 +137,7 @@ def build_audio_ydl_opts(
     dest_dir: Path,
     *,
     cookies_file: Path | None = None,
+    include_live: bool = False,
 ) -> dict[str, object]:
     """Build the ``yt_dlp.YoutubeDL`` opts dict for an audio-only download.
 
@@ -153,6 +155,7 @@ def build_audio_ydl_opts(
     unauthenticated download sends no cookie header at all.
     """
     opts: dict[str, object] = {
+        "_tldw_include_live": include_live,
         "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio",
         # ``lang`` must come first. yt-dlp puts user sort fields ahead of its
         # defaults, so without it ``+abr`` picks the smallest track, which is
@@ -250,14 +253,37 @@ def download_audio(
     else:
         factory = ydl_class
 
+    ydl_opts = opts.copy()
+    include_live = ydl_opts.pop("_tldw_include_live", False)
+    rejected_live = False
+
+    def exclude_live(info: dict[str, object], *, incomplete: object = False) -> str | None:
+        """Reject metadata that identifies an upcoming or past live event."""
+        nonlocal rejected_live
+        if (
+            info.get("live_status") in ("is_upcoming", "is_live", "post_live", "was_live")
+            or info.get("is_live") is True
+            or info.get("was_live") is True
+            or info.get("media_type") == "livestream"
+        ):
+            rejected_live = True
+            return "live_event_excluded"
+        return None
+
+    if not include_live:
+        ydl_opts["match_filter"] = exclude_live
+
     try:
-        with factory(opts) as ydl:
+        with factory(ydl_opts) as ydl:
             ydl.extract_info(url, download=True)
     except YoutubeDLError as exc:
         # YoutubeDLError is the common base of DownloadError and ExtractorError,
         # so both the download layer and the extractor layer are covered.
         state, detail = classify_error(str(exc))
         return DownloadResult(state=state, path=None, detail=detail)
+
+    if rejected_live:
+        return DownloadResult(ProbeState.SKIPPED_LIVE, None, "live_event_excluded")
 
     video_id = _audio_id_from_url(url)
     audio = _find_audio_file(dest_dir, video_id)

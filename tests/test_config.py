@@ -387,53 +387,59 @@ def test_transcribe_timeout_rejects_zero(
 
 
 # ---------------------------------------------------------------------------
-# Shorts filter setting
+# Content filter settings
 # ---------------------------------------------------------------------------
 
 
-def test_include_shorts_defaults_to_false(
+@pytest.mark.parametrize("field", ["include_shorts", "include_live"])
+def test_content_filters_default_to_false(
     settings_kwargs: Callable[..., dict[str, Any]],
+    field: str,
 ) -> None:
-    """Shorts are filtered by default so operators focus on full-length videos."""
+    """Shorts and live events are excluded by default."""
     # Arrange
-    # settings_kwargs has already cleared TLDW_INCLUDE_SHORTS.
+    # settings_kwargs has already cleared both filter environment variables.
 
     # Act
     settings = Settings(**settings_kwargs())
 
     # Assert
-    assert settings.include_shorts is False
+    assert getattr(settings, field) is False
 
 
 @pytest.mark.parametrize("raw_value", ["1", "true", "True", "yes"])
-def test_include_shorts_reads_truthy_env(
+@pytest.mark.parametrize("field", ["include_shorts", "include_live"])
+def test_content_filters_read_truthy_env(
     monkeypatch: pytest.MonkeyPatch,
     settings_kwargs: Callable[..., dict[str, Any]],
     raw_value: str,
+    field: str,
 ) -> None:
-    """A truthy TLDW_INCLUDE_SHORTS enables shorts delivery."""
+    """A truthy setting includes the corresponding content."""
     # Arrange
-    monkeypatch.setenv("TLDW_INCLUDE_SHORTS", raw_value)
+    monkeypatch.setenv(f"TLDW_{field.upper()}", raw_value)
 
     # Act
     settings = Settings(**settings_kwargs())
 
     # Assert
-    assert settings.include_shorts is True
+    assert getattr(settings, field) is True
 
 
 @pytest.mark.parametrize("raw_value", ["0", "false", "False", "no", ""])
-def test_include_shorts_reads_falsy_env(
+@pytest.mark.parametrize("field", ["include_shorts", "include_live"])
+def test_content_filters_read_falsy_env(
     monkeypatch: pytest.MonkeyPatch,
     settings_kwargs: Callable[..., dict[str, Any]],
     raw_value: str,
+    field: str,
 ) -> None:
-    """A falsy or blank TLDW_INCLUDE_SHORTS keeps shorts filtered."""
+    """A falsy or blank setting keeps the corresponding content excluded."""
     # Arrange
-    monkeypatch.setenv("TLDW_INCLUDE_SHORTS", raw_value)
+    monkeypatch.setenv(f"TLDW_{field.upper()}", raw_value)
 
     # Act
     settings = Settings(**settings_kwargs())
 
     # Assert
-    assert settings.include_shorts is False
+    assert getattr(settings, field) is False

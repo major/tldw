@@ -542,6 +542,57 @@ async def test_process_record_audio_classifies_429_as_rate_limited_and_streaks(
     assert transcribe.call_count == 0
 
 
+@pytest.mark.parametrize("include_live", [False, True])
+async def test_live_skip_is_terminal_without_failure_or_downstream_calls(
+    queue_store: QueueStore, tmp_path: Path, include_live: bool
+) -> None:
+    """A live skip is terminal, is not a failure, and passes the setting through."""
+    # Arrange
+    settings = make_settings(
+        tmp_path,
+        discord_webhook_url="https://discord.com/api/webhooks/x/y",
+        discord_alert_user_id="123456789012345678",
+        include_live=include_live,
+    )
+    now = 1000.0
+    _enqueue(queue_store, now)
+    download = FakeDownload(
+        [DownloadResult(ProbeState.SKIPPED_LIVE, None, "live_event_excluded")]
+    )
+    compress = FakeCompress()
+    transcribe = FakeTranscribe()
+    analyze = FakeAnalyze()
+    sender = CountingSend()
+    embeds = CountingSendEmbeds()
+
+    # Act
+    await _run_audio(
+        queue_store,
+        settings,
+        now=now,
+        download=download,
+        compress=compress,
+        transcribe=transcribe,
+        analyze=analyze,
+        sender=sender,
+        embeds_sender=embeds,
+    )
+
+    # Assert
+    assert download.last_opts is not None
+    assert download.last_opts["_tldw_include_live"] is include_live
+    assert queue_store.counts() == {"pending": 0, "SKIPPED_LIVE": 1}
+    assert queue_store.next_due(now=now + 100_000) is None
+    assert queue_store.next_failure_alert() is None
+    assert compress.call_count == 0
+    assert transcribe.call_count == 0
+    assert analyze.calls == 0
+    assert sender.calls == 0
+    assert embeds.calls == 0
+    row = read_queue_row(tmp_path / "queue.sqlite3", _VIDEO_ID)
+    assert row["detail"] == "live_event_excluded"
+
+
 async def test_process_record_audio_unavailable_marks_give_up(
     queue_store: QueueStore, tmp_path: Path
 ) -> None:

@@ -79,6 +79,8 @@ async def flush_failure_alert(
                 if alert.current_detail == "llm_fallback"
                 else "Video summary delivered successfully."
             )
+        elif alert.current_terminal_state == "SKIPPED_LIVE":
+            disposition = "Skipped because live events are excluded; no automatic retry."
         elif alert.current_terminal_state and alert.current_terminal_state.startswith(
             "GIVE_UP"
         ):

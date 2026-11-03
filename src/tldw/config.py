@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     # URL points at a YouTube Short so the digest only covers full-length
     # videos. Set TLDW_INCLUDE_SHORTS=true to keep them.
     include_shorts: bool = False
+    include_live: bool = False
 
     @field_validator("audio_format")
     @classmethod
@@ -202,10 +203,10 @@ class Settings(BaseSettings):
         stripped = value.strip()
         return stripped or None
 
-    @field_validator("include_shorts", mode="before")
+    @field_validator("include_shorts", "include_live", mode="before")
     @classmethod
-    def _normalize_include_shorts(cls, value: object) -> object:
-        """Treat a blank or whitespace TLDW_INCLUDE_SHORTS as the default false.
+    def _normalize_content_filter_bool(cls, value: object) -> object:
+        """Treat a blank content filter setting as the default false.
 
         Pydantic rejects an empty string with a ValidationError, which would
         break operators who leave the line commented out or trailing in

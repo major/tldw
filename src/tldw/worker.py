@@ -500,7 +500,9 @@ async def _download_stage(
     """
     store.mark_attempt(record.video_id, now=now)
     opts = build_audio_ydl_opts(
-        settings.audio_dir, cookies_file=settings.ytdlp_cookies_file
+        settings.audio_dir,
+        cookies_file=settings.ytdlp_cookies_file,
+        include_live=settings.include_live,
     )
     try:
         result = await asyncio.to_thread(
@@ -607,6 +609,13 @@ async def _download_stage(
             TerminalState.GIVE_UP_UNAVAILABLE,
             detail=result.detail,
         )
+        return None
+
+    if result.state is ProbeState.SKIPPED_LIVE:
+        store.mark_terminal(
+            record.video_id, TerminalState.SKIPPED_LIVE, detail=result.detail
+        )
+        logger.info("live event skipped: video=%s", record.video_id)
         return None
 
     # NOT_READY: the audio is not available yet. Back off and reset the streak.

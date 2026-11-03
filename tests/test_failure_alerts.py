@@ -59,6 +59,11 @@ def test_outbox_keeps_first_failure_across_reopen(tmp_path: Path) -> None:
             "Delivered using a plain transcript fallback.",
         ),
         (TerminalState.GIVE_UP_AUDIO, None, "Stopped; no automatic retry."),
+        (
+            TerminalState.SKIPPED_LIVE,
+            None,
+            "Skipped because live events are excluded; no automatic retry.",
+        ),
         (None, None, "Video remains queued for processing."),
     ],
 )

@@ -55,6 +55,9 @@ class FakeYoutubeDL:
         return False
 
     def extract_info(self, url: str, download: bool = True) -> dict[str, object]:
+        match_filter = self.opts.get("match_filter")
+        if callable(match_filter) and match_filter(self._info or {}, incomplete=False):
+            return self._info or {}
         # Write any pre-configured files to the outtmpl directory so the
         # download sees them exactly where yt-dlp would have put them.
         if self._write_files:
@@ -157,6 +160,140 @@ def test_build_audio_ydl_opts_selects_original_over_smaller_dub(tmp_path: Path) 
 
     # Assert
     assert result["format_id"] == "original"
+
+
+@pytest.mark.parametrize("live_status", ["is_upcoming", "is_live", "post_live", "was_live"])
+def test_match_filter_runs_before_formats_and_download(tmp_path: Path, live_status: str) -> None:
+    """Real yt-dlp exposes live metadata to the filter before selecting or downloading formats."""
+    # Arrange
+    import yt_dlp
+
+    observed: list[tuple[object, bool]] = []
+
+    def reject(info: dict[str, object], *, incomplete: bool = False) -> str:
+        """Record the metadata and reject the video with a sentinel reason."""
+        observed.append((info.get("live_status"), incomplete))
+        return "sentinel rejection"
+
+    def fail_download(*args: object, **kwargs: object) -> None:
+        """Prevent any media download if filtering fails."""
+        pytest.fail("Media download must not start")
+
+    info = {
+        "id": "vid",
+        "title": "t",
+        "extractor": "youtube",
+        "extractor_key": "Youtube",
+        "webpage_url": "https://example.invalid",
+        "live_status": live_status,
+        "formats": [] if live_status in {"is_upcoming", "post_live"} else [
+            _audio_format("original", "en-US", 10, 50.5)
+        ],
+    }
+    opts = build_audio_ydl_opts(tmp_path)
+    opts["match_filter"] = reject
+
+    # Act
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.process_info = fail_download
+        result = ydl.process_ie_result(info, download=True)
+
+    # Assert
+    assert result["live_status"] == live_status
+    assert observed and observed[0][0] == live_status
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"live_status": status}
+        for status in ("is_upcoming", "is_live", "post_live", "was_live")
+    ]
+    + [{"is_live": True}, {"was_live": True}, {"media_type": "livestream"}],
+)
+def test_download_rejects_live_metadata_before_download(
+    tmp_path: Path, metadata: dict[str, object]
+) -> None:
+    """The real yt-dlp filter rejects live metadata before formats or stale files are used."""
+    # Arrange
+    import yt_dlp
+
+    info = {
+        "id": _VIDEO_ID,
+        "title": "t",
+        "extractor": "youtube",
+        "extractor_key": "Youtube",
+        "webpage_url": "https://example.invalid",
+        "formats": [],
+        **metadata,
+    }
+    (tmp_path / f"{_VIDEO_ID}.webm").write_text("stale")
+    opts = build_audio_ydl_opts(tmp_path)
+    original = opts.copy()
+
+    class OfflineYoutubeDL(FakeYoutubeDL):
+        """Exercise yt-dlp processing without an extractor or network."""
+
+        def extract_info(self, url: str, download: bool = True) -> dict[str, object]:
+            """Process the supplied extractor result offline."""
+            with yt_dlp.YoutubeDL(self.opts) as ydl:
+                return ydl.process_ie_result(info.copy(), download=download)
+
+    # Act
+    result = download_audio(
+        _SHORT_URL, opts=opts, ydl_class=OfflineYoutubeDL, dest_dir=tmp_path
+    )
+
+    # Assert
+    assert result == DownloadResult(ProbeState.SKIPPED_LIVE, None, "live_event_excluded")
+    assert opts == original
+
+
+@pytest.mark.parametrize(
+    "include_live,metadata",
+    [
+        (True, {"live_status": "is_live"}),
+        (False, {"live_status": "not_live"}),
+        (False, {"live_status": "unknown", "is_live": False}),
+    ],
+)
+def test_download_allows_live_opt_in_and_ordinary_video(
+    tmp_path: Path, include_live: bool, metadata: dict[str, object]
+) -> None:
+    """Opted-in live events and ordinary metadata can produce audio."""
+    # Arrange
+    opts = build_audio_ydl_opts(tmp_path, include_live=include_live)
+    ydl = _fake(info=metadata, write_files=((f"{_VIDEO_ID}.webm", "audio"),))
+
+    # Act
+    result = download_audio(_SHORT_URL, opts=opts, ydl_class=ydl, dest_dir=tmp_path)
+
+    # Assert
+    assert result.state == ProbeState.READY
+
+
+def test_live_rejection_is_per_call_and_opts_are_unchanged(tmp_path: Path) -> None:
+    """A rejected call does not affect a later call using the same options."""
+    # Arrange
+    opts = build_audio_ydl_opts(tmp_path)
+    original = opts.copy()
+
+    # Act
+    rejected = download_audio(
+        _SHORT_URL, opts=opts, ydl_class=_fake(info={"is_live": True}), dest_dir=tmp_path
+    )
+    allowed = download_audio(
+        _SHORT_URL,
+        opts=opts,
+        ydl_class=_fake(write_files=((f"{_VIDEO_ID}.webm", "audio"),)),
+        dest_dir=tmp_path,
+    )
+
+    # Assert
+    assert rejected.state == ProbeState.SKIPPED_LIVE
+    assert allowed.state == ProbeState.READY
+    assert opts == original
 
 
 def test_build_audio_ydl_opts_routes_diagnostics_to_json(

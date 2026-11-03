@@ -104,10 +104,12 @@ class TerminalState(StrEnum):
     record the four ways the worker stops trying: the 48 hour cutoff with no
     captions ever seen, a video that is gone or bot-checked, a 429 budget that
     has been exhausted, and an audio transcription the API rejected with a
-    permanent 4xx error (for example a corrupt upload).
+    permanent 4xx error (for example a corrupt upload). SKIPPED_LIVE is a
+    normal content-policy skip, not a failure.
     """
 
     DONE = "DONE"
+    SKIPPED_LIVE = "SKIPPED_LIVE"
     GIVE_UP_NEVER = "GIVE_UP_NEVER"
     GIVE_UP_UNAVAILABLE = "GIVE_UP_UNAVAILABLE"
     GIVE_UP_RATE_LIMITED_DEAD = "GIVE_UP_RATE_LIMITED_DEAD"

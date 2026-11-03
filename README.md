@@ -70,6 +70,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_TRANSCRIBE_LANGS` | No | `["en"]` | JSON list of ISO-639-1 language hints to pass to the transcription API |
 | `TLDW_TRANSCRIBE_TIMEOUT_SECONDS` | No | `600` | Per-call transcription timeout, in seconds |
 | `TLDW_INCLUDE_SHORTS` | No | `false` | When `true`, YouTube Shorts are delivered alongside full-length videos. Shorts URLs (`/shorts/<id>`) are filtered out by default so the digest focuses on long-form uploads |
+| `TLDW_INCLUDE_LIVE` | No | `false` | By default, upcoming, current, recently ended, and replayed live events are skipped using metadata before audio download, not filtered from the feed. Set `true` to restore the original behavior for new pending videos. Terminal records are not revived, and older cached or overdue records are not retroactively filtered |
 
 The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
 

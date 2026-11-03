@@ -159,6 +159,48 @@ def test_build_audio_ydl_opts_selects_original_over_smaller_dub(tmp_path: Path) 
     assert result["format_id"] == "original"
 
 
+@pytest.mark.parametrize("live_status", ["is_upcoming", "is_live", "post_live", "was_live"])
+def test_match_filter_runs_before_formats_and_download(tmp_path: Path, live_status: str) -> None:
+    """Real yt-dlp exposes live metadata to the filter before selecting or downloading formats."""
+    # Arrange
+    import yt_dlp
+
+    observed: list[tuple[object, bool]] = []
+
+    def reject(info: dict[str, object], *, incomplete: bool = False) -> str:
+        """Record the metadata and reject the video with a sentinel reason."""
+        observed.append((info.get("live_status"), incomplete))
+        return "sentinel rejection"
+
+    def fail_download(*args: object, **kwargs: object) -> None:
+        """Prevent any media download if filtering fails."""
+        pytest.fail("Media download must not start")
+
+    info = {
+        "id": "vid",
+        "title": "t",
+        "extractor": "youtube",
+        "extractor_key": "Youtube",
+        "webpage_url": "https://example.invalid",
+        "live_status": live_status,
+        "formats": [] if live_status in {"is_upcoming", "post_live"} else [
+            _audio_format("original", "en-US", 10, 50.5)
+        ],
+    }
+    opts = build_audio_ydl_opts(tmp_path)
+    opts["match_filter"] = reject
+
+    # Act
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.process_info = fail_download
+        result = ydl.process_ie_result(info, download=True)
+
+    # Assert
+    assert result["live_status"] == live_status
+    assert observed and observed[0][0] == live_status
+    assert not list(tmp_path.iterdir())
+
+
 def test_build_audio_ydl_opts_routes_diagnostics_to_json(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

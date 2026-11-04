@@ -89,18 +89,26 @@ def test_blocked_disabled_backlog_is_safe(
     assert "secret-value" not in error
 
 
-@pytest.mark.parametrize("content", ["[]", '{"channel_ids": null}', '{"channel_ids": [123]}'])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "[]",
+        "channels: null",
+        "channels: [{channel_id: 123}]",
+        "channels: [private-source-marker",
+    ],
+)
 def test_malformed_legacy_file_exits_safely(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     content: str,
 ) -> None:
-    """Malformed legacy structures produce a controlled error without input values."""
+    """Malformed YAML produces a controlled error without input values."""
     from tldw.validate_config import main
 
     # Arrange
-    path = tmp_path / "channels.json"
+    path = tmp_path / "channels.yaml"
     path.write_text(content)
     monkeypatch.setenv("TLDW_CHANNELS_FILE", str(path))
     monkeypatch.delenv("TLDW_TOPICS_FILE", raising=False)
@@ -108,10 +116,11 @@ def test_malformed_legacy_file_exits_safely(
     # Act and assert
     with pytest.raises(SystemExit) as exc:
         main([])
-    assert exc.value.code != 0
+    assert exc.value.code == 1
     error = capsys.readouterr().err
     assert "Configuration error" in error
     assert "Traceback" not in error and "123" not in error
+    assert "private-source-marker" not in error
 
 
 @pytest.mark.parametrize("case", ["missing", "disabled", "wal"])

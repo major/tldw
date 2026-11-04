@@ -1,6 +1,5 @@
 """Characterize the optional topic deployment assets."""
 
-import json
 from pathlib import Path
 
 import yaml
@@ -15,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_example_matches_legacy_sources_and_prompt() -> None:
     """Keep the example compatible with the legacy configuration."""
     # Arrange
-    ids = json.loads((ROOT / "channels.json").read_text())["channel_ids"]
+    catalog = yaml.safe_load((ROOT / "channels.yaml").read_text())
+    ids = [entry["channel_id"] for entry in catalog["channels"]]
     # Act
     registry = load_topics(
         ROOT / "topics.example.yaml", environ={"TLDW_DISCORD_WEBHOOK_URL": "fake"}

@@ -184,9 +184,8 @@ def _filter_known_channels(
     try:
         known = set(tldw_config.resolve_channel_ids(settings))
     except Exception:
-        # Broad on purpose: a bad id raises ValueError, a bad file raises OSError
-        # or a JSON error, and a file with the wrong shape raises AttributeError
-        # or TypeError. None of them may turn into a 500 and a hub retry.
+        # Broad on purpose: invalid IDs, YAML, or schema raise ValueError, and
+        # file access can raise OSError. Errors must not cause a 500 and hub retry.
         logger.exception("could not resolve channel ids; skipping channel filter")
         return entries
     if not known:

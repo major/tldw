@@ -20,10 +20,11 @@ keys, invalid IDs, and duplicate active sources are rejected. Prompt file paths
 are relative to the topics file. Changes are loaded as a startup snapshot;
 restart after editing the file, prompts, or environment.
 
-Topic YAML supplies the active sources instead of the legacy JSON or CSV. A
+Topic YAML supplies the active sources instead of `channels.yaml` or CSV. A
 nonempty `TLDW_CHANNEL_IDS` conflicts with topics at runtime and must be
-removed. In legacy mode, that CSV overrides the configured JSON file; compare
-against the effective source set, not necessarily the repository's JSON file.
+removed. In single-destination mode, that CSV overrides the configured channel
+YAML file; compare against the effective source set, not necessarily the
+repository's `channels.yaml`.
 Channel names in YAML are metadata and do not change feed metadata. An active
 source belongs to only one topic; there is no fanout. In YAML mode, notifications
 from unknown or disabled sources are acknowledged and dropped, not assigned to

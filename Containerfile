@@ -13,7 +13,7 @@ WORKDIR /opt/app-root/src
 
 COPY --chown=0:0 pyproject.toml uv.lock .python-version README.md ./
 COPY --chown=0:0 src ./src
-COPY --chown=0:0 channels.json ./
+COPY --chown=0:0 channels.yaml ./
 COPY --chown=0:0 topics.example.yaml ./
 COPY --chown=0:0 prompts ./prompts
 
@@ -71,7 +71,7 @@ WORKDIR /opt/app-root/src
 # Copy the build artefacts with that ownership so the runtime user can read and
 # execute them without ever needing root.
 COPY --from=builder --chown=1000:1000 /opt/app-root/src/.venv /opt/app-root/src/.venv
-COPY --from=builder --chown=1000:1000 /opt/app-root/src/channels.json /opt/app-root/src/channels.json
+COPY --from=builder --chown=1000:1000 /opt/app-root/src/channels.yaml /opt/app-root/src/channels.yaml
 COPY --from=builder --chown=1000:1000 /opt/app-root/src/topics.example.yaml /opt/app-root/src/topics.example.yaml
 COPY --from=builder --chown=1000:1000 /opt/app-root/src/prompts /opt/app-root/src/prompts
 

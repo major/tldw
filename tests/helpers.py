@@ -8,7 +8,6 @@ boundary between auto-injected fixtures and explicit helpers stays clear.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
@@ -16,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx2
+import yaml
 
 from tldw.config import Settings
 from tldw.feed import VideoEntry
@@ -54,7 +54,7 @@ def make_settings(tmp_path: Path | None = None, **overrides: Any) -> Settings:
     """
     defaults: dict[str, Any] = {
         "callback_url": "https://cb.example/pubsub/callback",
-        "channel_ids_file": Path("/nonexistent.json"),
+        "channel_ids_file": Path("/nonexistent.yaml"),
     }
     if tmp_path is not None:
         defaults["transcript_dir"] = tmp_path / "transcripts"
@@ -242,16 +242,17 @@ def make_channels_file(
     tmp_path: Path,
     ids: list[str],
     *,
-    name: str = "channels.json",
+    name: str = "channels.yaml",
 ) -> Path:
-    """Write a ``channels.json`` containing the given channel ids and return its path.
+    """Write a ``channels.yaml`` containing the given channel ids and return its path.
 
-    Default ``name`` is ``channels.json``; tests that need a different filename
+    Default ``name`` is ``channels.yaml``; tests that need a different filename
     (rare) can pass one. ``tmp_path`` is required so the file lives under the
     test's temporary directory.
     """
     path = tmp_path / name
-    path.write_text(json.dumps({"channel_ids": ids}), encoding="utf-8")
+    catalog = {"channels": [{"channel_id": channel_id} for channel_id in ids]}
+    path.write_text(yaml.safe_dump(catalog), encoding="utf-8")
     return path
 
 

@@ -457,7 +457,7 @@ def settings_without_callback(tmp_path: Path) -> Settings:
 
 @pytest.fixture
 def empty_channels_file(tmp_path: Path) -> Path:
-    """An empty channels.json (no channel_ids key with content)."""
+    """A YAML channel file with an empty channels list."""
     return make_channels_file(tmp_path, [])
 
 
@@ -1505,7 +1505,7 @@ def test_notify_without_channel_config_enqueues_every_entry(
     """With no channel list configured, every delivered entry is still enqueued."""
     # Arrange
     if channel_ids is None:
-        channels_file = tmp_path / "missing.json"
+        channels_file = tmp_path / "missing.yaml"
     else:
         channels_file = make_channels_file(tmp_path, channel_ids)
     settings = make_settings(tmp_path, channel_ids_file=channels_file)
@@ -1536,8 +1536,8 @@ def test_notify_without_channel_config_enqueues_every_entry(
 @pytest.mark.parametrize(
     "file_text",
     [
-        pytest.param('{"channel_ids": ["not-a-channel-id"]}', id="invalid-id"),
-        pytest.param("{not json", id="malformed-json"),
+        pytest.param("channels: [{channel_id: not-a-channel-id}]", id="invalid-id"),
+        pytest.param("channels: [", id="malformed-yaml"),
         pytest.param('["UC_REMOVEDFIXTURE0000001"]', id="wrong-shape"),
     ],
 )
@@ -1549,7 +1549,7 @@ def test_notify_unreadable_channel_config_delivers_unfiltered_and_returns_200(
 ) -> None:
     """A channel file that cannot be resolved logs an error and still delivers everything."""
     # Arrange
-    channels_file = tmp_path / "channels.json"
+    channels_file = tmp_path / "channels.yaml"
     channels_file.write_text(file_text, encoding="utf-8")
     settings = make_settings(tmp_path, channel_ids_file=channels_file)
     app = create_app(settings)

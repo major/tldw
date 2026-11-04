@@ -18,22 +18,22 @@ uv sync --all-extras --dev
 
 ## Configure :gear:
 
-`channels.json` in the project root is the default list:
+`channels.yaml` in the project root is the default list:
 
-```json
-{
-  "channel_ids": [
-    "UC_ywfvIR2JrnMuZt33y7QYQ",
-    "UCvJZEG5x-DVYZKTz--pS39w"
-  ]
-}
+```yaml
+channels:
+  - channel_id: UC_ywfvIR2JrnMuZt33y7QYQ
+    name: Example channel
+  - channel_id: UCvJZEG5x-DVYZKTz--pS39w
 ```
+
+Each entry requires a string `channel_id`; `name` is optional metadata.
 
 A channel id is the `UC...` value you find on the channel's YouTube page or in the URL of any of its videos. Two ways to override:
 
 | Method | Behavior |
 | --- | --- |
-| Edit `channels.json` | Used when no env override is set |
+| Edit `channels.yaml` | Used when no env override is set |
 | `TLDW_CHANNEL_IDS="UC_xxx,UC_zzz"` (CSV) | Replaces the file when non-empty |
 
 Environment variables (all read from the `TLDW_` namespace):
@@ -41,7 +41,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `TLDW_CALLBACK_URL` | Yes (for subscribes) | unset | Public URL the hub will POST notifications to |
-| `TLDW_CHANNELS_FILE` | No | `channels.json` | Path to the JSON channel list |
+| `TLDW_CHANNELS_FILE` | No | `channels.yaml` | Path to the YAML channel list |
 | `TLDW_CHANNEL_IDS` | No | unset | CSV override for the channel list |
 | `TLDW_TOPICS_FILE` | No | unset | Opt in to topics YAML; conflicts with a nonempty channel CSV |
 | `TLDW_HUB_SECRET` | No | unset | HMAC secret for signing deliveries. When set, every incoming notification must carry a matching `X-Hub-Signature: sha1=...` header |
@@ -72,7 +72,9 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_INCLUDE_SHORTS` | No | `false` | When `true`, YouTube Shorts are delivered alongside full-length videos. Shorts URLs (`/shorts/<id>`) are filtered out by default so the digest focuses on long-form uploads |
 | `TLDW_INCLUDE_LIVE` | No | `false` | By default, upcoming, current, recently ended, and replayed live events are skipped using metadata before audio download, not filtered from the feed. Set `true` to restore the original behavior for new pending videos. Terminal records are not revived, and older cached or overdue records are not retroactively filtered |
 
-The file is gitignored-by-convention. Do not commit it if you have private channels. Keep `channels.json` for the default list, or commit an example and let operators override with `TLDW_CHANNEL_IDS`. :file_folder:
+For private channels, use a separate file via `TLDW_CHANNELS_FILE` or use the `TLDW_CHANNEL_IDS` CSV override. Do not commit private channel lists. :file_folder:
+
+**Migration:** `TLDW_CHANNELS_FILE` now expects YAML with `channels` entries as shown above, rather than the old `channel_ids` list. Convert custom files to the new schema. The CSV override still works. Rebuild container images to include the updated default list.
 
 For opt-in topic routing and a safe migration, see [Topics YAML](docs/topics.md).
 
@@ -158,7 +160,7 @@ A multi-stage `Containerfile` and `compose.yml` ship with the repo. They pin
 the official `python:3.15` (full Debian-based image, not the `-slim`
 variant), install the locked runtime dependencies plus `ffmpeg` for
 `yt-dlp` postprocessing, and run as a non-root user. The default
-`channels.json` is baked into the image; override the channel list with
+`channels.yaml` is baked into the image; override the channel list with
 `TLDW_CHANNEL_IDS` at runtime. :package:
 
 ```bash
@@ -294,7 +296,7 @@ tests/
   test_renderer.py        # format_video_line matrix
   test_tldw.py            # CLI + module re-exports
 
-channels.json       # default channel list
+channels.yaml       # default channel list
 ```
 
 ## Out of scope :no_entry_sign:

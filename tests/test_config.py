@@ -1,7 +1,7 @@
 """Tests for tldw.config.
 
 These tests cover the two configuration sources for the channel list: the
-``TLDW_CHANNEL_IDS`` environment variable and the JSON file named by
+``TLDW_CHANNEL_IDS`` environment variable and the YAML file named by
 ``TLDW_CHANNELS_FILE``. They also pin down the YouTube channel id validation
 policy so malformed ids fail fast with a message the operator can act on.
 
@@ -55,7 +55,7 @@ def test_settings_loads_from_env(
     # Assert
     assert settings.callback_url == "https://cb.example/cb"
     assert settings.hub_secret == "shh"
-    assert settings.channel_ids_file == Path("channels.json")
+    assert settings.channel_ids_file == Path("channels.yaml")
     assert settings.channel_ids_env_override is None
 
 
@@ -73,7 +73,7 @@ def test_settings_defaults_when_no_env(
     assert settings.callback_url is None
     assert settings.channel_ids_env_override is None
     assert settings.hub_secret is None
-    assert settings.channel_ids_file == Path("channels.json")
+    assert settings.channel_ids_file == Path("channels.yaml")
 
 
 def test_resolve_uses_env_csv_when_set(
@@ -82,12 +82,8 @@ def test_resolve_uses_env_csv_when_set(
 ) -> None:
     """A non-empty env CSV wins over the file and keeps its order."""
     # Arrange
-    channels_file = tmp_path / "channels.json"
-    make_channels_file(
-        channels_file.parent,
-        ["UC_FILEAAAAAAAAAAAAAA_xx"],
-        name=channels_file.name,
-    )
+    channels_file = tmp_path / "channels.yaml"
+    channels_file.write_text("channels: [")
     settings = Settings(
         **settings_kwargs(
             channel_ids_file=channels_file,
@@ -108,9 +104,9 @@ def test_resolve_falls_back_to_file_when_no_env(
     tmp_path: Path,
     settings_kwargs: Callable[..., dict[str, Any]],
 ) -> None:
-    """With no env override the channel ids come from the JSON file."""
+    """With no env override the channel ids come from the YAML file."""
     # Arrange
-    channels_file = tmp_path / "channels.json"
+    channels_file = tmp_path / "channels.yaml"
     make_channels_file(
         channels_file.parent,
         ["UC_FILEAAAAAAAAAAAAAA_01", "UC_FILEAAAAAAAAAAAAAA_02"],
@@ -136,7 +132,7 @@ def test_resolve_empty_env_falls_back_to_file(
 ) -> None:
     """A blank env override is treated as unset and the file is used."""
     # Arrange
-    channels_file = tmp_path / "channels.json"
+    channels_file = tmp_path / "channels.yaml"
     make_channels_file(
         channels_file.parent,
         ["UC_FILEAAAAAAAAAAAAAA_01", "UC_FILEAAAAAAAAAAAAAA_02"],
@@ -183,7 +179,7 @@ def test_resolve_missing_file_warns_and_returns_empty(
 ) -> None:
     """A missing file logs a warning naming the path and returns no ids."""
     # Arrange
-    missing_file = tmp_path / "does-not-exist.json"
+    missing_file = tmp_path / "does-not-exist.yaml"
     settings = Settings(**settings_kwargs(channel_ids_file=missing_file))
     caplog.set_level(logging.WARNING)
 
@@ -214,9 +210,9 @@ def test_resolve_rejects_malformed_file_id(
     tmp_path: Path,
     settings_kwargs: Callable[..., dict[str, Any]],
 ) -> None:
-    """A malformed id in the JSON file raises ValueError naming the id."""
+    """A malformed id in the YAML file raises ValueError naming the id."""
     # Arrange
-    channels_file = tmp_path / "channels.json"
+    channels_file = tmp_path / "channels.yaml"
     make_channels_file(
         channels_file.parent, ["UC_BAD"], name=channels_file.name
     )
@@ -257,18 +253,13 @@ def test_settings_channel_ids_file_is_path(
 ) -> None:
     """TLDW_CHANNELS_FILE is parsed into a Path."""
     # Arrange
-    monkeypatch.setenv("TLDW_CHANNELS_FILE", "/tmp/foo.json")
+    monkeypatch.setenv("TLDW_CHANNELS_FILE", "/tmp/foo.yaml")
 
     # Act
     settings = Settings(**settings_kwargs())
 
     # Assert
-    assert settings.channel_ids_file == Path("/tmp/foo.json")
-
-
-# ---------------------------------------------------------------------------
-# Audio pipeline settings
-# ---------------------------------------------------------------------------
+    assert settings.channel_ids_file == Path("/tmp/foo.yaml")
 
 
 @pytest.mark.parametrize("override", [None, "", " , "])
@@ -307,7 +298,7 @@ def test_resolve_yaml_catalog_preserves_order(
     ],
 )
 def test_resolve_rejects_invalid_yaml_catalog(tmp_path: Path, content: str) -> None:
-    """Malformed YAML and obsolete shapes cannot silently disable filtering."""
+    """Malformed YAML and obsolete shapes raise rather than returning no IDs."""
     # Arrange
     path = tmp_path / "channels.yaml"
     path.write_text(content)
@@ -316,6 +307,11 @@ def test_resolve_rejects_invalid_yaml_catalog(tmp_path: Path, content: str) -> N
     # Act / Assert
     with pytest.raises(ValueError):
         resolve_channel_ids(settings)
+
+
+# ---------------------------------------------------------------------------
+# Audio pipeline settings
+# ---------------------------------------------------------------------------
 
 
 def test_audio_settings_defaults(settings_kwargs: Callable[..., dict[str, Any]]) -> None:

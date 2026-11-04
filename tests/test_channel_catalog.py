@@ -11,7 +11,6 @@ from tldw.config import Settings, resolve_channel_ids
 @pytest.mark.parametrize(
     ("filename", "keys"),
     [
-        ("channels.json", ("channel_ids",)),
         ("channels.yaml", ("channels",)),
         ("topics.example.yaml", ("topics", "default", "channels")),
     ],

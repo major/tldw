@@ -13,14 +13,6 @@ from tldw.config import Settings, resolve_channel_ids
 from tldw.topics import TopicConfigError, TopicRegistry, load_topics
 
 
-def _legacy_sources(settings: Settings) -> list[str]:
-    """Resolve legacy sources while hiding malformed file values and tracebacks."""
-    try:
-        return resolve_channel_ids(settings)
-    except AttributeError, TypeError:
-        raise TopicConfigError("legacy channel file has an invalid structure") from None
-
-
 def _check_queue(path: Path, registry: TopicRegistry | None) -> int:
     """Inspect pending videos and unsent alerts using a read-only connection."""
     # Immutable mode cannot read a WAL, so refuse it instead of missing backlog.
@@ -74,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
         settings = Settings()
         registry = None
         if settings.topics_file is None:
-            sources = _legacy_sources(settings)
+            sources = resolve_channel_ids(settings)
             topic_count = 1
         else:
             if (
@@ -91,7 +83,7 @@ def main(argv: list[str] | None = None) -> None:
 
                 default = registry.topics["default"]
                 if (
-                    set(_legacy_sources(settings)) != set(sources)
+                    set(resolve_channel_ids(settings)) != set(sources)
                     or default.system_prompt != SYSTEM_PROMPT
                     or default._builtin != "trading"
                     or default.webhook_env != "TLDW_DISCORD_WEBHOOK_URL"

@@ -2,7 +2,7 @@
 
 Settings are read from environment variables in the TLDW_ namespace. The
 channel list has two sources: the TLDW_CHANNEL_IDS environment variable and the
-JSON file named by TLDW_CHANNELS_FILE. The environment variable wins when it
+YAML file named by TLDW_CHANNELS_FILE. The environment variable wins when it
 holds at least one non-blank id; otherwise the file is used. When neither
 source yields ids the resolver returns an empty list and logs a warning so the
 service can still start and an operator can fix the input.
@@ -14,11 +14,11 @@ listing all of the offenders at once so the operator can fix them in one pass.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
 
+import yaml
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     Environment names:
         TLDW_CALLBACK_URL: URL the hub calls to deliver notifications.
-        TLDW_CHANNELS_FILE: path to the JSON channel id list.
+        TLDW_CHANNELS_FILE: path to the YAML channel list.
         TLDW_CHANNEL_IDS: comma-separated channel ids that override the file.
         TLDW_HUB_SECRET: HMAC secret for signed hub deliveries.
         TLDW_DISCORD_WEBHOOK_URL: webhook URL for transcript-to-Discord delivery.
@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     # aliased fields carry the full TLDW_ names to match the documented env
     # vars. populate_by_name lets callers still pass the Python field names.
     channel_ids_file: Path = Field(
-        default=Path("channels.json"), alias="TLDW_CHANNELS_FILE"
+        default=Path("channels.yaml"), alias="TLDW_CHANNELS_FILE"
     )
     channel_ids_env_override: str | None = Field(
         default=None, alias="TLDW_CHANNEL_IDS"
@@ -237,14 +237,15 @@ def resolve_channel_ids(settings: Settings) -> list[str]:
 
     Precedence: when TLDW_CHANNEL_IDS holds at least one non-blank id it is
     used and the file is ignored. Whitespace around each comma-separated id is
-    trimmed and blank entries are dropped. Otherwise the JSON file named by
-    TLDW_CHANNELS_FILE is read: it must be an object with a "channel_ids" list
-    of strings, and other keys are ignored. When the file is missing a warning
+    trimmed and blank entries are dropped. Otherwise the YAML file named by
+    TLDW_CHANNELS_FILE is read: it must contain a "channels" list of mappings
+    with string "channel_id" values. When the file is missing a warning
     naming the path is logged and an empty list is returned.
 
     Raises:
-        ValueError: when any resolved id does not match the YouTube channel id
-            shape. The message lists every invalid id.
+        ValueError: when the YAML or its schema is invalid, or a resolved id
+            does not match the YouTube channel id shape. The message lists
+            every invalid id.
     """
     env_value = settings.channel_ids_env_override
     if env_value is not None:
@@ -254,9 +255,20 @@ def resolve_channel_ids(settings: Settings) -> list[str]:
             return _validate_channel_ids(candidates)
 
     if settings.channel_ids_file.exists():
-        raw = json.loads(settings.channel_ids_file.read_text(encoding="utf-8"))
-        file_ids = raw.get("channel_ids", [])
-        return _validate_channel_ids(list(file_ids))
+        try:
+            raw = yaml.safe_load(settings.channel_ids_file.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            raise ValueError("invalid channel YAML") from None
+        if not isinstance(raw, dict) or not isinstance(raw.get("channels"), list):
+            raise ValueError("channel YAML must contain a channels list")
+        file_ids = []
+        for channel in raw["channels"]:
+            if not isinstance(channel, dict) or not isinstance(
+                channel.get("channel_id"), str
+            ):
+                raise ValueError("each channel must contain a string channel_id")
+            file_ids.append(channel["channel_id"])
+        return _validate_channel_ids(file_ids)
 
     logger.warning(
         "channel id file %s does not exist and TLDW_CHANNEL_IDS is not set",

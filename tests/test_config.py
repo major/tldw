@@ -271,6 +271,53 @@ def test_settings_channel_ids_file_is_path(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("override", [None, "", " , "])
+def test_resolve_yaml_catalog_preserves_order(
+    tmp_path: Path, override: str | None
+) -> None:
+    """YAML comments and optional friendly names do not change ordered IDs."""
+    # Arrange
+    path = tmp_path / "channels.yaml"
+    path.write_text(
+        "# A human-readable channel list\nchannels:\n"
+        "  - channel_id: UC_FILEAAAAAAAAAAAAAA_02\n    name: Friendly channel\n"
+        "  - channel_id: UC_FILEAAAAAAAAAAAAAA_01\n"
+    )
+    settings = Settings(channel_ids_file=path, channel_ids_env_override=override)
+
+    # Act
+    result = resolve_channel_ids(settings)
+
+    # Assert
+    assert result == ["UC_FILEAAAAAAAAAAAAAA_02", "UC_FILEAAAAAAAAAAAAAA_01"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "[]",
+        "channel_ids: []",
+        "channels: null",
+        "channels: not-a-list",
+        "channels: [123]",
+        "channels: [{}]",
+        "channels: [{channel_id: 123}]",
+        "channels: [",
+    ],
+)
+def test_resolve_rejects_invalid_yaml_catalog(tmp_path: Path, content: str) -> None:
+    """Malformed YAML and obsolete shapes cannot silently disable filtering."""
+    # Arrange
+    path = tmp_path / "channels.yaml"
+    path.write_text(content)
+    settings = Settings(channel_ids_file=path)
+
+    # Act / Assert
+    with pytest.raises(ValueError):
+        resolve_channel_ids(settings)
+
+
 def test_audio_settings_defaults(settings_kwargs: Callable[..., dict[str, Any]]) -> None:
     """The audio pipeline defaults match the documented plan."""
     # Arrange

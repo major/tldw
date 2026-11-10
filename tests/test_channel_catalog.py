@@ -1,4 +1,4 @@
-"""Regression coverage for the shipped Stage Analysis channel configuration."""
+"""Regression coverage for the shipped channel configuration."""
 
 from pathlib import Path
 
@@ -15,8 +15,11 @@ from tldw.config import Settings, resolve_channel_ids
         ("topics.example.yaml", ("topics", "default", "channels")),
     ],
 )
-def test_stage_analysis_in_channel_configs(filename: str, keys: tuple[str, ...]) -> None:
-    """Each shipped channel list includes Stage Analysis exactly once."""
+@pytest.mark.parametrize("channel_id", ["UCKzgts1fFoDla4ozJSn1eZQ", "UCMno7bbQKigk6RxiO0uv78g"])
+def test_followed_channels_in_channel_configs(
+    filename: str, keys: tuple[str, ...], channel_id: str
+) -> None:
+    """Each shipped channel list includes the followed channels exactly once."""
     # Arrange
     path = Path(__file__).resolve().parents[1] / filename
     config = yaml.safe_load(path.read_text())
@@ -27,7 +30,7 @@ def test_stage_analysis_in_channel_configs(filename: str, keys: tuple[str, ...])
     channel_ids = [entry if isinstance(entry, str) else entry["channel_id"] for entry in config]
 
     # Assert
-    assert channel_ids.count("UCKzgts1fFoDla4ozJSn1eZQ") == 1
+    assert channel_ids.count(channel_id) == 1
 
 
 def test_runtime_uses_shipped_yaml_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,7 +48,7 @@ def test_runtime_uses_shipped_yaml_catalog(monkeypatch: pytest.MonkeyPatch) -> N
     # Assert
     assert settings.channel_ids_file == Path("channels.yaml")
     assert channel_ids == expected
-    assert "UCMno7bbQKigk6RxiO0uv78g" not in channel_ids
+    assert "UCMno7bbQKigk6RxiO0uv78g" in channel_ids
 
 
 def test_container_ships_only_yaml_channel_list() -> None:

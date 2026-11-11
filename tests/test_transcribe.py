@@ -9,6 +9,7 @@ canned result whose ``.text`` the production code reads.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -51,10 +52,17 @@ class _FakeTranscriptions:
             "response_format": response_format,
             **kwargs,
         }
+        self._parent.calls.append(self._parent.create_kwargs)
 
         async def _coro() -> _FakeResult:
+            """Return the next scripted result or raise its error."""
             if self._parent.delay:
                 await asyncio.sleep(self._parent.delay)
+            if self._parent.script:
+                item = self._parent.script.pop(0)
+                if isinstance(item, BaseException):
+                    raise item
+                return item
             if self._parent.raises is not None:
                 raise self._parent.raises
             return self._parent.result or _FakeResult("")
@@ -86,6 +94,7 @@ class FakeAsyncOpenAI:
         result: _FakeResult | None = None,
         raises: BaseException | None = None,
         delay: float = 0.0,
+        script: list[Any] | None = None,
     ) -> None:
         """Configure canned behavior and record constructor kwargs."""
         self.init_kwargs: dict[str, Any] = {
@@ -93,6 +102,8 @@ class FakeAsyncOpenAI:
             "base_url": base_url,
         }
         self.create_kwargs: dict[str, Any] = {}
+        self.calls: list[dict[str, Any]] = []
+        self.script = list(script or [])
         self.result = result
         self.raises = raises
         self.delay = delay
@@ -120,10 +131,17 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, **config: Any) -> FakeAsyncOp
     fake = FakeAsyncOpenAI(**config)
 
     def _factory(**kwargs: Any) -> FakeAsyncOpenAI:
+        """Record client options and return the configured fake."""
         fake.init_kwargs = dict(kwargs)
         return fake
 
+    @asynccontextmanager
+    async def _chunks(path: Path):
+        """Keep placeholder audio away from real media tools."""
+        yield [path]
+
     monkeypatch.setattr(transcribe, "AsyncOpenAI", _factory)
+    monkeypatch.setattr(transcribe, "audio_chunks", _chunks, raising=False)
     return fake
 
 
@@ -544,3 +562,97 @@ def test_build_prompt_with_only_channel() -> None:
     # Assert
     assert result is not None
     assert "US English" in result
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_chunks_are_sequential_and_cleaned_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    """Join ordered chunks, or stop on failure without leaking handles."""
+    # Arrange
+    source = _audio_file(tmp_path)
+    paths = [tmp_path / f"chunk-{i}.webm" for i in range(3)]
+    for path in paths:
+        path.write_bytes(b"chunk")
+    script = [_FakeResult("first"), _status_error(400) if fails else _FakeResult("second"), _FakeResult("third")]
+    fake = _install_fake(monkeypatch, script=script)
+    cleaned = []
+
+    @asynccontextmanager
+    async def chunks(_path: Path):
+        """Simulate temporary chunks and record cleanup."""
+        try:
+            yield paths
+        finally:
+            cleaned.append(True)
+            for path in paths:
+                path.unlink()
+
+    monkeypatch.setattr(transcribe, "audio_chunks", chunks)
+    # Act
+    if fails:
+        with pytest.raises(transcribe.TranscribeError):
+            await transcribe.transcribe(source, **_kwargs(source, prompt="context", keywords=["word"]))
+    else:
+        result = await transcribe.transcribe(source, **_kwargs(source, prompt="context", keywords=["word"]))
+        assert result == "first\n\nsecond\n\nthird"
+    # Assert
+    assert len(fake.calls) == (2 if fails else 3)
+    assert [Path(call["file"].name) for call in fake.calls] == paths[:len(fake.calls)]
+    assert all(call["file"].closed and call["prompt"] == "context" and call["keywords"] == ["word"] for call in fake.calls)
+    assert fake.init_kwargs["max_retries"] == 0
+    assert cleaned and source.exists() and not any(path.exists() for path in paths)
+
+
+async def test_timeout_covers_preparation_and_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preparation and requests share one deadline."""
+    # Arrange
+    source = _audio_file(tmp_path)
+    fake = _install_fake(monkeypatch, delay=0.04, result=_FakeResult("late"))
+
+    @asynccontextmanager
+    async def chunks(path: Path):
+        """Consume part of the total deadline before the request."""
+        await asyncio.sleep(0.04)
+        yield [path]
+
+    monkeypatch.setattr(transcribe, "audio_chunks", chunks)
+    # Act / Assert
+    with pytest.raises(TimeoutError):
+        await transcribe.transcribe(source, **_kwargs(source, timeout_s=0.06))
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize(("category", "expected"), [
+    ("duration_limit", "Audio exceeds the provider duration limit."),
+    ("size_limit", "Audio exceeds the provider upload size limit."),
+    ("context_limit", "Audio exceeds the provider context limit."),
+    ("invalid_audio", "Provider could not decode the audio."),
+    ("unsupported_format", "Provider does not support the audio format."),
+    ("secret", None),
+])
+def test_reason_allowlist(category: str, expected: str | None) -> None:
+    """Only fixed, recognized reason categories are exposed."""
+    assert transcribe.TranscribeError("secret", reason=category).reason == expected
+
+
+@pytest.mark.parametrize(("body", "expected"), [
+    ({"error": {"message": "Audio duration exceeds the maximum duration. secret @everyone https://secret.test\nsecret"}}, "Audio exceeds the provider duration limit."),
+    ({"message": "secret " + "x" * 2000 + " maximum audio duration exceeded"}, None),
+    ({"error": ["secret"]}, None),
+    ({"message": "secret @everyone https://secret.test\nsecret"}, None),
+])
+async def test_provider_reason_is_safe_and_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, expected: str | None) -> None:
+    """Provider text is classified within a bound and never surfaced."""
+    # Arrange
+    source = _audio_file(tmp_path)
+    request = httpx2.Request("POST", "https://example.test")
+    original = openai.APIStatusError("secret", response=httpx2.Response(400, request=request), body=body)
+    _install_fake(monkeypatch, raises=original)
+    # Act
+    with pytest.raises(transcribe.TranscribeError) as caught:
+        await transcribe.transcribe(source, **_kwargs(source))
+    # Assert
+    assert caught.value.reason == expected
+    assert caught.value.__cause__ is original
+    assert "secret" not in str(caught.value) and "@everyone" not in str(caught.value)

@@ -726,17 +726,20 @@ async def _transcribe_stage(
                 if isinstance(status, int)
                 else "Transcription failed."
             )
+            if exc.reason:
+                reason += f" {exc.reason}"
         logger.warning(
-            "transcription failed for %s: status=%s code=%s",
+            "transcription failed for %s: status=%s code=%s reason=%s",
             record.video_id,
             status,
             exc.error_code,
+            exc.reason,
         )
         record_failure(settings, store, record, "transcription", reason, retrying, now)
         if status is not None and 400 <= status < 500 and status != 429:
             # A permanent client error: retrying cannot fix a bad upload.
             store.mark_terminal(
-                record.video_id, TerminalState.GIVE_UP_AUDIO, detail=str(exc)
+                record.video_id, TerminalState.GIVE_UP_AUDIO, detail=reason
             )
             return None
         # 429 and 5xx are transient; fall through to the backoff reschedule.
@@ -775,7 +778,7 @@ async def _transcribe_stage(
         )
         store.reschedule(record.video_id, next_attempt_at=now + delay)
         return None
-    except openai.APIError as exc:
+    except openai.APIError:
         record_failure(
             settings,
             store,
@@ -786,7 +789,9 @@ async def _transcribe_stage(
             now,
         )
         store.mark_terminal(
-            record.video_id, TerminalState.GIVE_UP_AUDIO, detail=str(exc)
+            record.video_id,
+            TerminalState.GIVE_UP_AUDIO,
+            detail="Transcription API failed.",
         )
         return None
     except Exception as exc:

@@ -68,7 +68,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_FFMPEG_TIMEOUT_SECONDS` | No | `900` | Per-call ffmpeg timeout, in seconds |
 | `TLDW_TRANSCRIBE_MODEL` | No | `gpt-transcribe` | OpenAI speech-to-text model. `gpt-transcribe` is the current recommended model; the `gpt-4o-transcribe` family is deprecated and shuts down 2027-02-26 |
 | `TLDW_TRANSCRIBE_LANGS` | No | `["en"]` | JSON list of ISO-639-1 language hints to pass to the transcription API |
-| `TLDW_TRANSCRIBE_TIMEOUT_SECONDS` | No | `600` | Per-call transcription timeout, in seconds |
+| `TLDW_TRANSCRIBE_TIMEOUT_SECONDS` | No | `600` | Total transcription timeout, including preparation and all requests, in seconds |
 | `TLDW_INCLUDE_SHORTS` | No | `false` | When `true`, YouTube Shorts are delivered alongside full-length videos. Shorts URLs (`/shorts/<id>`) are filtered out by default so the digest focuses on long-form uploads |
 | `TLDW_INCLUDE_LIVE` | No | `false` | By default, upcoming, current, recently ended, and replayed live events are skipped using metadata before audio download, not filtered from the feed. Set `true` to restore the original behavior for new pending videos. Terminal records are not revived, and older cached or overdue records are not retroactively filtered |
 
@@ -119,6 +119,8 @@ YouTube session cookies expire, typically after a few weeks of inactivity. When 
 ### LLM video takeaways
 
 The API key is required for audio transcription; the worker exits without it. After transcription, the worker analyzes the transcript and posts a briefing header plus three takeaway embeds instead of the plain digest. Each takeaway has a short title, a summary, and bullet points that may link back to supported timestamps in the video.
+
+Compressed audio is split without re-encoding when needed, with a 20-minute operational target per chunk and a one-second boundary tolerance. Each chunk has a 24 MB safety cap. The source is limited to 128 chunks worth of bytes and 2,560 minutes, and every input and chunk is validated before any request. Up to 128 chunks are sent serially under one total timeout (600 seconds by default). There is no chunk checkpoint, so a worker retry repeats earlier requests and may repeat billing. The original compressed audio is kept on failure. Provider failure reasons are classified into fixed, sanitized descriptions; provider text is not included.
 
 If the model call fails, times out, or returns an invalid shape, the worker logs a warning and sends the plain digest instead. A bad LLM call never costs a retry against YouTube: it is not a download, so it does not consume the request budget. :robot:
 

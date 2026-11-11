@@ -16,8 +16,11 @@ def source(tmp_path: Path) -> Path:
     return path
 
 
-async def test_short_audio_is_passed_through(source: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_short_audio_is_passed_through(
+    source: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A small short file is yielded unchanged without running ffmpeg."""
+
     async def probe(_path: Path) -> float:
         """Return a duration within tolerance."""
         return audio.CHUNK_SECONDS + audio.DURATION_TOLERANCE_SECONDS
@@ -33,9 +36,14 @@ async def test_short_audio_is_passed_through(source: Path, monkeypatch: pytest.M
     assert source.exists()
 
 
-@pytest.mark.parametrize("duration", [0, -1, float("nan"), float("inf"), 128 * 1200 + 1])
-async def test_invalid_source_duration_is_rejected(source: Path, monkeypatch: pytest.MonkeyPatch, duration: float) -> None:
+@pytest.mark.parametrize(
+    "duration", [0, -1, float("nan"), float("inf"), 128 * 1200 + 1]
+)
+async def test_invalid_source_duration_is_rejected(
+    source: Path, monkeypatch: pytest.MonkeyPatch, duration: float
+) -> None:
     """Invalid or unbounded source durations never reach the caller."""
+
     async def probe(_path: Path) -> float:
         """Return the invalid source duration."""
         return duration
@@ -57,7 +65,9 @@ async def test_empty_or_missing_source_is_rejected(source: Path, missing: bool) 
 
 
 @pytest.mark.parametrize("invalid", [False, True])
-async def test_segments_are_sorted_validated_and_removed(source: Path, monkeypatch: pytest.MonkeyPatch, invalid: bool) -> None:
+async def test_segments_are_sorted_validated_and_removed(
+    source: Path, monkeypatch: pytest.MonkeyPatch, invalid: bool
+) -> None:
     """Validate every segment before yield and clean the temporary directory."""
     generated: list[Path] = []
     commands: list[tuple[str, ...]] = []
@@ -88,16 +98,33 @@ async def test_segments_are_sorted_validated_and_removed(source: Path, monkeypat
         async with audio.audio_chunks(source) as chunks:
             assert chunks == sorted(generated)
             assert all(path.exists() for path in chunks)
-    assert source.exists() and generated and not any(path.exists() for path in generated)
-    assert commands and all(value in commands[0] for value in ("-nostdin", "-map", "0:a:0", "-c:a", "copy", "segment", "1200", "-reset_timestamps"))
+    assert (
+        source.exists() and generated and not any(path.exists() for path in generated)
+    )
+    assert commands and all(
+        value in commands[0]
+        for value in (
+            "-nostdin",
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "copy",
+            "segment",
+            "1200",
+            "-reset_timestamps",
+        )
+    )
 
 
-async def test_subprocess_cancellation_kills_and_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_subprocess_cancellation_kills_and_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Cancellation reaps the media subprocess before propagating."""
     started = asyncio.Event()
 
     class Process:
         """A process that waits until cancelled."""
+
         killed = False
         waited = False
 
@@ -133,7 +160,9 @@ async def test_subprocess_cancellation_kills_and_waits(monkeypatch: pytest.Monke
 
 
 @pytest.mark.parametrize("mode", ["none", "empty", "oversized", "too_many", "failure"])
-async def test_bad_segments_never_escape(source: Path, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+async def test_bad_segments_never_escape(
+    source: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
     """Missing, invalid, excessive, or failed output is rejected safely."""
     generated: list[Path] = []
 
@@ -163,3 +192,84 @@ async def test_bad_segments_never_escape(source: Path, monkeypatch: pytest.Monke
             pytest.fail("invalid output yielded")
     assert "secret stderr" not in str(caught.value)
     assert source.exists() and not any(path.exists() for path in generated)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"bad",
+        b"{}",
+        b'{"format":{"duration":"N/A"}}',
+        b'{"format":{"duration":"nan"}}',
+        b'{"format":{"duration":null}}',
+    ],
+)
+async def test_bad_probe_output_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, output: bytes
+) -> None:
+    """Malformed or nonfinite probe results never pass validation."""
+
+    # Arrange
+    async def run(*_args: str) -> bytes:
+        """Return invalid ffprobe output."""
+        return output
+
+    monkeypatch.setattr(audio, "_run", run)
+    # Act / Assert
+    with pytest.raises(audio.AudioPreparationError):
+        await audio._probe(Path("source.webm"))
+
+
+async def test_source_size_cap_rejects_before_probe(
+    source: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sparse oversized source is rejected before media tools run."""
+    # Arrange
+    with source.open("r+b") as stream:
+        stream.truncate(audio.MAX_CHUNKS * audio.MAX_UPLOAD_BYTES + 1)
+
+    async def probe(_path: Path) -> float:
+        """Reject unexpected probe calls."""
+        pytest.fail("unexpected probe")
+
+    monkeypatch.setattr(audio, "_probe", probe)
+    # Act / Assert
+    with pytest.raises(audio.AudioPreparationError):
+        async with audio.audio_chunks(source):
+            pytest.fail("oversized source yielded")
+
+
+async def test_failed_process_cleans_partial_segments(
+    source: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nonzero ffmpeg exit removes partial output and keeps the source."""
+    # Arrange
+    generated: list[Path] = []
+
+    async def probe(_path: Path) -> float:
+        """Force segmentation."""
+        return 1300
+
+    class Process:
+        """Return a failed process result after writing a segment."""
+
+        returncode = 1
+
+        async def communicate(self) -> tuple[bytes, None]:
+            """Return the failed subprocess output."""
+            return b"secret", None
+
+    async def spawn(*args: str, **_kwargs: object) -> Process:
+        """Write a partial output before the subprocess fails."""
+        path = Path(args[-1]).parent / "segment-0000.webm"
+        path.write_bytes(b"partial")
+        generated.append(path)
+        return Process()
+
+    monkeypatch.setattr(audio, "_probe", probe)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    # Act / Assert
+    with pytest.raises(audio.AudioPreparationError, match="Audio preparation failed"):
+        async with audio.audio_chunks(source):
+            pytest.fail("failed output yielded")
+    assert source.exists() and generated and not generated[0].exists()

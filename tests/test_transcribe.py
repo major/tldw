@@ -574,7 +574,11 @@ async def test_chunks_are_sequential_and_cleaned_up(
     paths = [tmp_path / f"chunk-{i}.webm" for i in range(3)]
     for path in paths:
         path.write_bytes(b"chunk")
-    script = [_FakeResult("first"), _status_error(400) if fails else _FakeResult("second"), _FakeResult("third")]
+    script = [
+        _FakeResult("first"),
+        _status_error(400) if fails else _FakeResult("second"),
+        _FakeResult("third"),
+    ]
     fake = _install_fake(monkeypatch, script=script)
     cleaned = []
 
@@ -592,19 +596,30 @@ async def test_chunks_are_sequential_and_cleaned_up(
     # Act
     if fails:
         with pytest.raises(transcribe.TranscribeError):
-            await transcribe.transcribe(source, **_kwargs(source, prompt="context", keywords=["word"]))
+            await transcribe.transcribe(
+                source, **_kwargs(source, prompt="context", keywords=["word"])
+            )
     else:
-        result = await transcribe.transcribe(source, **_kwargs(source, prompt="context", keywords=["word"]))
+        result = await transcribe.transcribe(
+            source, **_kwargs(source, prompt="context", keywords=["word"])
+        )
         assert result == "first\n\nsecond\n\nthird"
     # Assert
     assert len(fake.calls) == (2 if fails else 3)
-    assert [Path(call["file"].name) for call in fake.calls] == paths[:len(fake.calls)]
-    assert all(call["file"].closed and call["prompt"] == "context" and call["keywords"] == ["word"] for call in fake.calls)
+    assert [Path(call["file"].name) for call in fake.calls] == paths[: len(fake.calls)]
+    assert all(
+        call["file"].closed
+        and call["prompt"] == "context"
+        and call["keywords"] == ["word"]
+        for call in fake.calls
+    )
     assert fake.init_kwargs["max_retries"] == 0
     assert cleaned and source.exists() and not any(path.exists() for path in paths)
 
 
-async def test_timeout_covers_preparation_and_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_timeout_covers_preparation_and_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Preparation and requests share one deadline."""
     # Arrange
     source = _audio_file(tmp_path)
@@ -623,31 +638,51 @@ async def test_timeout_covers_preparation_and_requests(tmp_path: Path, monkeypat
     assert len(fake.calls) == 1
 
 
-@pytest.mark.parametrize(("category", "expected"), [
-    ("duration_limit", "Audio exceeds the provider duration limit."),
-    ("size_limit", "Audio exceeds the provider upload size limit."),
-    ("context_limit", "Audio exceeds the provider context limit."),
-    ("invalid_audio", "Provider could not decode the audio."),
-    ("unsupported_format", "Provider does not support the audio format."),
-    ("secret", None),
-])
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [
+        ("duration_limit", "Audio exceeds the provider duration limit."),
+        ("size_limit", "Audio exceeds the provider upload size limit."),
+        ("context_limit", "Audio exceeds the provider context limit."),
+        ("invalid_audio", "Provider could not decode the audio."),
+        ("unsupported_format", "Provider does not support the audio format."),
+        ("secret", None),
+    ],
+)
 def test_reason_allowlist(category: str, expected: str | None) -> None:
     """Only fixed, recognized reason categories are exposed."""
     assert transcribe.TranscribeError("secret", reason=category).reason == expected
 
 
-@pytest.mark.parametrize(("body", "expected"), [
-    ({"error": {"message": "Audio duration exceeds the maximum duration. secret @everyone https://secret.test\nsecret"}}, "Audio exceeds the provider duration limit."),
-    ({"message": "secret " + "x" * 2000 + " maximum audio duration exceeded"}, None),
-    ({"error": ["secret"]}, None),
-    ({"message": "secret @everyone https://secret.test\nsecret"}, None),
-])
-async def test_provider_reason_is_safe_and_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, expected: str | None) -> None:
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            {
+                "error": {
+                    "message": "Audio duration exceeds the maximum duration. secret @everyone https://secret.test\nsecret"
+                }
+            },
+            "Audio exceeds the provider duration limit.",
+        ),
+        (
+            {"message": "secret " + "x" * 2000 + " maximum audio duration exceeded"},
+            None,
+        ),
+        ({"error": ["secret"]}, None),
+        ({"message": "secret @everyone https://secret.test\nsecret"}, None),
+    ],
+)
+async def test_provider_reason_is_safe_and_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: object, expected: str | None
+) -> None:
     """Provider text is classified within a bound and never surfaced."""
     # Arrange
     source = _audio_file(tmp_path)
     request = httpx2.Request("POST", "https://example.test")
-    original = openai.APIStatusError("secret", response=httpx2.Response(400, request=request), body=body)
+    original = openai.APIStatusError(
+        "secret", response=httpx2.Response(400, request=request), body=body
+    )
     _install_fake(monkeypatch, raises=original)
     # Act
     with pytest.raises(transcribe.TranscribeError) as caught:
@@ -656,3 +691,52 @@ async def test_provider_reason_is_safe_and_bounded(tmp_path: Path, monkeypatch: 
     assert caught.value.reason == expected
     assert caught.value.__cause__ is original
     assert "secret" not in str(caught.value) and "@everyone" not in str(caught.value)
+
+
+async def test_preparation_failure_makes_no_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preparation failures are sanitized and never start an API request."""
+    # Arrange
+    source = _audio_file(tmp_path)
+    fake = _install_fake(monkeypatch)
+
+    @asynccontextmanager
+    async def chunks(_path: Path):
+        """Fail before yielding any chunk."""
+        raise transcribe.AudioPreparationError("secret")
+        yield []
+
+    monkeypatch.setattr(transcribe, "audio_chunks", chunks)
+    # Act / Assert
+    with pytest.raises(
+        transcribe.TranscribeError, match="Audio preparation failed"
+    ) as caught:
+        await transcribe.transcribe(source, **_kwargs(source))
+    assert caught.value.status_code is None and not fake.calls and source.exists()
+
+
+async def test_timeout_cancels_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The total deadline cancels preparation before any API request."""
+    # Arrange
+    source = _audio_file(tmp_path)
+    fake = _install_fake(monkeypatch)
+    cancelled = False
+
+    @asynccontextmanager
+    async def chunks(_path: Path):
+        """Block until the deadline cancels preparation."""
+        nonlocal cancelled
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled = True
+        yield []
+
+    monkeypatch.setattr(transcribe, "audio_chunks", chunks)
+    # Act / Assert
+    with pytest.raises(TimeoutError):
+        await transcribe.transcribe(source, **_kwargs(source, timeout_s=0.01))
+    assert cancelled and not fake.calls and source.exists()

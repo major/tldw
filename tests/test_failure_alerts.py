@@ -226,13 +226,19 @@ async def test_transcription_failure_is_queued(
     assert alert.retrying is retrying
 
 
-@pytest.mark.parametrize(("category", "expected"), [
-    ("duration_limit", "Audio exceeds the provider duration limit."),
-    ("secret-category", None),
-])
+@pytest.mark.parametrize(
+    ("category", "expected"),
+    [
+        ("duration_limit", "Audio exceeds the provider duration limit."),
+        ("secret-category", None),
+    ],
+)
 async def test_transcription_reason_is_safe_in_alert_detail_and_log(
-    tmp_path: Path, queue_store: QueueStore, caplog: pytest.LogCaptureFixture,
-    category: str, expected: str | None,
+    tmp_path: Path,
+    queue_store: QueueStore,
+    caplog: pytest.LogCaptureFixture,
+    category: str,
+    expected: str | None,
 ) -> None:
     """Persist and log only the allowlisted reason, never exception text."""
     # Arrange
@@ -240,13 +246,24 @@ async def test_transcription_reason_is_safe_in_alert_detail_and_log(
     queue_store.enqueue(make_video_entry("video1"), now=1)
     record = queue_store.next_due(now=1)
     assert record is not None
-    error = TranscribeError("secret @everyone https://secret.test", status_code=400, reason=category)
+    error = TranscribeError(
+        "secret @everyone https://secret.test", status_code=400, reason=category
+    )
     # Act
-    await worker._transcribe_stage(tmp_path / "audio", record, settings, queue_store, transcribe=FakeTranscribe(raises=error), now=1)
+    await worker._transcribe_stage(
+        tmp_path / "audio",
+        record,
+        settings,
+        queue_store,
+        transcribe=FakeTranscribe(raises=error),
+        now=1,
+    )
     # Assert
     alert = queue_store.next_failure_alert()
     assert alert is not None
-    detail = queue_store._conn.execute("SELECT detail FROM videos WHERE video_id = ?", ("video1",)).fetchone()[0]
+    detail = queue_store._conn.execute(
+        "SELECT detail FROM videos WHERE video_id = ?", ("video1",)
+    ).fetchone()[0]
     for text in (alert.reason, detail, caplog.text):
         assert "secret" not in text and "@everyone" not in text
         if expected:
@@ -254,31 +271,58 @@ async def test_transcription_reason_is_safe_in_alert_detail_and_log(
     assert "400" in caplog.text
 
 
-async def test_fallback_api_error_never_persists_provider_text(tmp_path: Path, queue_store: QueueStore) -> None:
+async def test_fallback_api_error_never_persists_provider_text(
+    tmp_path: Path, queue_store: QueueStore
+) -> None:
     """The direct SDK error fallback stores a fixed terminal detail."""
     # Arrange
     settings = make_settings(tmp_path, discord_alert_user_id=USER)
     queue_store.enqueue(make_video_entry("video1"), now=1)
     record = queue_store.next_due(now=1)
     assert record is not None
-    error = openai.APIError("secret", request=httpx2.Request("POST", "https://example.test"), body=None)
+    error = openai.APIError(
+        "secret", request=httpx2.Request("POST", "https://example.test"), body=None
+    )
     # Act
-    await worker._transcribe_stage(tmp_path / "audio", record, settings, queue_store, transcribe=FakeTranscribe(raises=error), now=1)
+    await worker._transcribe_stage(
+        tmp_path / "audio",
+        record,
+        settings,
+        queue_store,
+        transcribe=FakeTranscribe(raises=error),
+        now=1,
+    )
     # Assert
-    detail = queue_store._conn.execute("SELECT detail FROM videos WHERE video_id = ?", ("video1",)).fetchone()[0]
+    detail = queue_store._conn.execute(
+        "SELECT detail FROM videos WHERE video_id = ?", ("video1",)
+    ).fetchone()[0]
     assert detail == "Transcription API failed."
 
 
-async def test_quota_alert_takes_precedence_over_safe_reason(tmp_path: Path, queue_store: QueueStore) -> None:
+async def test_quota_alert_takes_precedence_over_safe_reason(
+    tmp_path: Path, queue_store: QueueStore
+) -> None:
     """Billing guidance wins over audio-specific guidance for quota errors."""
     # Arrange
     settings = make_settings(tmp_path, discord_alert_user_id=USER)
     queue_store.enqueue(make_video_entry("video1"), now=1)
     record = queue_store.next_due(now=1)
     assert record is not None
-    error = TranscribeError("secret", status_code=429, error_code="insufficient_quota", reason="duration_limit")
+    error = TranscribeError(
+        "secret",
+        status_code=429,
+        error_code="insufficient_quota",
+        reason="duration_limit",
+    )
     # Act
-    await worker._transcribe_stage(tmp_path / "audio", record, settings, queue_store, transcribe=FakeTranscribe(raises=error), now=1)
+    await worker._transcribe_stage(
+        tmp_path / "audio",
+        record,
+        settings,
+        queue_store,
+        transcribe=FakeTranscribe(raises=error),
+        now=1,
+    )
     # Assert
     alert = queue_store.next_failure_alert()
     assert alert is not None

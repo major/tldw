@@ -299,6 +299,35 @@ async def test_fallback_api_error_never_persists_provider_text(
     assert detail == "Transcription API failed."
 
 
+@pytest.mark.parametrize("permanent", [False, True])
+async def test_local_preparation_failure_disposition(
+    tmp_path: Path, queue_store: QueueStore, permanent: bool
+) -> None:
+    """Only deterministic local preparation failures stop without retrying."""
+    # Arrange
+    settings = make_settings(tmp_path, discord_alert_user_id=USER)
+    queue_store.enqueue(make_video_entry("video1"), now=1)
+    record = queue_store.next_due(now=1)
+    assert record is not None
+    error = TranscribeError(
+        "secret", reason="invalid_duration", permanent=permanent
+    )
+
+    # Act
+    await worker._transcribe_stage(
+        tmp_path / "audio", record, settings, queue_store,
+        transcribe=FakeTranscribe(raises=error), now=1,
+    )
+
+    # Assert
+    alert = queue_store.next_failure_alert()
+    assert alert is not None
+    assert alert.retrying is not permanent
+    assert alert.current_terminal_state == ("GIVE_UP_AUDIO" if permanent else None)
+    assert "Audio duration is unavailable or invalid." in alert.reason
+    assert "secret" not in alert.reason and "HTTP" not in alert.reason
+
+
 async def test_quota_alert_takes_precedence_over_safe_reason(
     tmp_path: Path, queue_store: QueueStore
 ) -> None:

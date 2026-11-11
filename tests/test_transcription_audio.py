@@ -76,7 +76,7 @@ async def test_segments_are_sorted_validated_and_removed(
         """Make the source long and optionally reject the last segment."""
         if path == source:
             return 1300
-        return 1202 if invalid and path.name == "segment-0001.webm" else 600
+        return 1202 if invalid and path.name == "segment-0001.webm" else 650
 
     async def run(*args: str) -> bytes:
         """Create segments in reverse order without running ffmpeg."""
@@ -273,3 +273,86 @@ async def test_failed_process_cleans_partial_segments(
         async with audio.audio_chunks(source):
             pytest.fail("failed output yielded")
     assert source.exists() and generated and not generated[0].exists()
+
+
+@pytest.mark.parametrize("segment_duration", [600, 800])
+async def test_segments_must_cover_the_source(
+    source: Path, monkeypatch: pytest.MonkeyPatch, segment_duration: float
+) -> None:
+    """Reject incomplete or duplicated audio before yielding any chunks."""
+    # Arrange
+    generated: list[Path] = []
+
+    async def probe(path: Path) -> float:
+        """Report a mismatch between source and combined segment durations."""
+        return 1300 if path == source else segment_duration
+
+    async def run(*args: str) -> bytes:
+        """Create individually valid but collectively invalid segments."""
+        for index in range(2):
+            path = Path(args[-1]).parent / f"segment-{index:04d}.webm"
+            path.write_bytes(b"chunk")
+            generated.append(path)
+        return b""
+
+    monkeypatch.setattr(audio, "_probe", probe)
+    monkeypatch.setattr(audio, "_run", run)
+
+    # Act / Assert
+    with pytest.raises(audio.AudioPreparationError) as caught:
+        async with audio.audio_chunks(source):
+            pytest.fail("incomplete audio yielded")
+    assert caught.value.permanent
+    assert caught.value.reason == "incomplete_audio"
+    assert source.exists() and not any(path.exists() for path in generated)
+
+
+async def test_size_only_split_uses_shorter_segments(
+    source: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Short oversized recordings use a size-aware segment interval."""
+    # Arrange
+    source.write_bytes(b"x" * 1100)
+    monkeypatch.setattr(audio, "MAX_UPLOAD_BYTES", 1000)
+
+    async def probe(path: Path) -> float:
+        """Report complete source coverage across four small chunks."""
+        return 900 if path == source else 225
+
+    async def run(*args: str) -> bytes:
+        """Check size-aware splitting and generate bounded output."""
+        interval = float(args[args.index("-segment_time") + 1])
+        assert 0 < interval < 900
+        for index in range(4):
+            path = Path(args[-1]).parent / f"segment-{index:04d}.webm"
+            path.write_bytes(b"x" * 275)
+        return b""
+
+    monkeypatch.setattr(audio, "_probe", probe)
+    monkeypatch.setattr(audio, "_run", run)
+
+    # Act / Assert
+    async with audio.audio_chunks(source) as chunks:
+        assert len(chunks) == 4
+        assert all(path.stat().st_size <= audio.MAX_UPLOAD_BYTES for path in chunks)
+    assert source.exists() and not any(path.exists() for path in chunks)
+
+
+@pytest.mark.parametrize("duration", [float("nan"), 128 * 1200 + 1])
+async def test_invalid_input_is_permanent_and_safe(
+    source: Path, monkeypatch: pytest.MonkeyPatch, duration: float
+) -> None:
+    """Deterministic input rejection is distinguishable from tool failures."""
+    # Arrange
+    async def probe(_path: Path) -> float:
+        """Return a source duration that cannot safely be processed."""
+        return duration
+
+    monkeypatch.setattr(audio, "_probe", probe)
+
+    # Act / Assert
+    with pytest.raises(audio.AudioPreparationError) as caught:
+        async with audio.audio_chunks(source):
+            pytest.fail("invalid input yielded")
+    assert caught.value.permanent
+    assert caught.value.reason in {"invalid_duration", "preparation_limit"}

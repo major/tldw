@@ -654,6 +654,33 @@ def test_reason_allowlist(category: str, expected: str | None) -> None:
     assert transcribe.TranscribeError("secret", reason=category).reason == expected
 
 
+async def test_permanent_preparation_failure_preserves_safe_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local rejection keeps its disposition without fabricating an HTTP status."""
+    # Arrange
+    from tldw.transcription_audio import AudioPreparationError
+
+    source = _audio_file(tmp_path)
+    fake = _install_fake(monkeypatch)
+
+    @asynccontextmanager
+    async def chunks(_path: Path):
+        """Reject invalid duration metadata before any provider request."""
+        raise AudioPreparationError("invalid_duration", permanent=True)
+        yield []
+
+    monkeypatch.setattr(transcribe, "audio_chunks", chunks)
+
+    # Act / Assert
+    with pytest.raises(transcribe.TranscribeError) as caught:
+        await transcribe.transcribe(source, **_kwargs(source))
+    assert caught.value.permanent
+    assert caught.value.status_code is None
+    assert caught.value.reason == "Audio duration is unavailable or invalid."
+    assert fake.calls == []
+
+
 @pytest.mark.parametrize(
     ("body", "expected"),
     [

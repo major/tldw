@@ -704,8 +704,8 @@ async def _transcribe_stage(
     """Transcribe the compressed audio and persist the .txt transcript.
 
     Returns the transcript text, or None when the record was resolved or
-    rescheduled. A permanent 4xx (except 429) marks GIVE_UP_AUDIO; a 429,
-    connection error, or timeout reschedules with backoff. On success the .txt
+    rescheduled. Permanent local errors and 4xx (except 429) mark GIVE_UP_AUDIO;
+    a 429, connection error, or timeout reschedules with backoff. On success the .txt
     is written, the compressed audio is deleted, and the record is rescheduled
     with ``transcript_path`` set so a crash resumes at the LLM stage.
     """
@@ -717,7 +717,10 @@ async def _transcribe_stage(
         )
     except TranscribeError as exc:
         status = exc.status_code
-        retrying = not (status is not None and 400 <= status < 500 and status != 429)
+        retrying = not (
+            exc.permanent
+            or (status is not None and 400 <= status < 500 and status != 429)
+        )
         if exc.error_code in {"credit_balance_exhausted", "insufficient_quota"}:
             reason = "OpenAI credits or quota exhausted; check billing."
         else:
@@ -736,8 +739,8 @@ async def _transcribe_stage(
             exc.reason,
         )
         record_failure(settings, store, record, "transcription", reason, retrying, now)
-        if status is not None and 400 <= status < 500 and status != 429:
-            # A permanent client error: retrying cannot fix a bad upload.
+        if not retrying:
+            # Retrying cannot fix a permanent local or client error.
             store.mark_terminal(
                 record.video_id, TerminalState.GIVE_UP_AUDIO, detail=reason
             )

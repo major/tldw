@@ -42,7 +42,11 @@ from typing import Any
 import openai
 from openai import AsyncOpenAI
 
-from tldw.transcription_audio import AudioPreparationError, audio_chunks
+from tldw.transcription_audio import (
+    PREPARATION_REASONS,
+    AudioPreparationError,
+    audio_chunks,
+)
 
 __all__ = ["transcribe", "TranscribeError", "DEFAULT_TIMEOUT_SECONDS"]
 
@@ -58,6 +62,7 @@ DEFAULT_TIMEOUT_SECONDS: float = 600.0
 TRANSCRIBE_LANGUAGES: tuple[str, ...] = ("en",)
 
 REASONS = {
+    **PREPARATION_REASONS,
     "duration_limit": "Audio exceeds the provider duration limit.",
     "size_limit": "Audio exceeds the provider upload size limit.",
     "context_limit": "Audio exceeds the provider context limit.",
@@ -82,10 +87,12 @@ class TranscribeError(RuntimeError):
         status_code: int | None = None,
         error_code: str | None = None,
         reason: str | None = None,
+        permanent: bool = False,
     ) -> None:
         """Store the message and optional HTTP status code."""
         super().__init__(message)
         self.status_code = status_code
+        self.permanent = permanent
         self.reason = REASONS.get(reason) if reason is not None else None
         self.error_code = (
             error_code
@@ -226,13 +233,13 @@ async def transcribe(
                                     file=fh, **call_kwargs
                                 )
                         except OSError as exc:
-                            raise AudioPreparationError(
-                                "Audio preparation failed."
-                            ) from exc
+                            raise AudioPreparationError() from exc
                         transcripts.append(result.text)
                     return "\n\n".join(transcripts)
     except AudioPreparationError as exc:
-        raise TranscribeError("Audio preparation failed.") from exc
+        raise TranscribeError(
+            str(exc), reason=exc.reason, permanent=exc.permanent
+        ) from exc
     except openai.APIStatusError as exc:
         body = exc.body
         if isinstance(body, dict) and isinstance(body.get("error"), dict):

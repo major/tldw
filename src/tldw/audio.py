@@ -358,11 +358,5 @@ def compress_audio(
     return dst
 
 
-# TODO(chunking): videos longer than roughly 100 minutes should be split before
-# compression so a single ffmpeg pass cannot exceed the worker's timeout and so
-# the transcription service receives chunks it can process in parallel. The
-# ffmpeg segment muxer is the obvious tool, but it only writes a segment when
-# the *next* keyframe arrives, so each segment boundary drifts and the final
-# segment can be much shorter or longer than the target. Fixing that means
-# forcing keyframes at exact intervals (or splitting on silence with
-# silencedetect) and then remuxing, which is more than this step needs today.
+# Transcription segments compressed audio afterward. Compression itself remains
+# a single pass and may still time out for very long recordings.

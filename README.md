@@ -57,8 +57,9 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_OPENAI_API_KEY` | Yes (for worker) | unset | API key required for audio transcription; the worker exits without it |
 | `TLDW_OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible endpoint |
 | `TLDW_OPENAI_MODEL` | No | `gpt-6.2-sol` | Model name to request from the endpoint |
+| `TLDW_OPENAI_REASONING_EFFORT` | No | `high` | Reasoning effort for takeaway requests. One of `low`, `medium`, `high`, `xhigh`, or `max`. `none` and `minimal` are rejected at startup |
 | `TLDW_LLM_TIMEOUT_SECONDS` | No | `180.0` | Per-call timeout for a takeaway request |
-| `TLDW_LLM_MAX_OUTPUT_TOKENS` | No | `2048` | Maximum tokens the takeaway model may generate |
+| `TLDW_LLM_MAX_OUTPUT_TOKENS` | No | `32768` | Maximum tokens the takeaway model may generate, including reasoning tokens |
 | `TLDW_LLM_MAX_INPUT_CHARS` | No | `300000` | Hard cap on transcript characters sent to the model. Longer transcripts are truncated with a warning |
 | `TLDW_TAKEAWAY_MAX_BULLETS` | No | `5` | Maximum bullets kept per takeaway |
 | `TLDW_AUDIO_DOWNLOAD_DELAY_SECONDS` | No | `300` | Delay before the first audio download. Debounces notifications and gives YouTube's pipeline time to finish producing the video |

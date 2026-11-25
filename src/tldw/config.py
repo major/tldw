@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import Field, field_validator
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
         TLDW_OPENAI_API_KEY: API key for the OpenAI LLM; unset disables takeaways.
         TLDW_OPENAI_BASE_URL: base URL for the OpenAI-compatible endpoint.
         TLDW_OPENAI_MODEL: model name to request from the endpoint.
+        TLDW_OPENAI_REASONING_EFFORT: reasoning effort for takeaways; one of low, medium, high, xhigh, max.
         TLDW_LLM_TIMEOUT_SECONDS: per-call timeout for a takeaway request.
         TLDW_LLM_MAX_OUTPUT_TOKENS: max tokens the takeaway model may generate.
         TLDW_LLM_MAX_INPUT_CHARS: hard cap on transcript characters sent to the LLM.
@@ -121,8 +123,12 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-6.2-sol"
+    # gpt-6.2-sol rejects "none" and does not support "minimal", so neither is
+    # allowed here. Reasoning tokens count toward max_output_tokens, which is
+    # why the output budget below is large.
+    openai_reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     llm_timeout_seconds: float = 180.0
-    llm_max_output_tokens: int = 2048
+    llm_max_output_tokens: int = 32768
     # Hard cap on transcript characters sent to the LLM. Longer transcripts are
     # truncated with a warning rather than rejected, so one long video cannot
     # fail the whole run.

@@ -362,6 +362,20 @@ def test_audio_settings_read_from_env(
     assert settings.transcribe_timeout_seconds == 120.0
 
 
+@pytest.mark.parametrize("effort", ["none", "minimal"])
+def test_reasoning_effort_rejects_levels_unsupported_by_gpt_6_2_sol(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_kwargs: Callable[..., dict[str, Any]],
+    effort: str,
+) -> None:
+    """gpt-6.2-sol rejects none and minimal, so bad levels fail at startup."""
+    # Arrange
+    monkeypatch.setenv("TLDW_OPENAI_REASONING_EFFORT", effort)
+    # Act / Assert
+    with pytest.raises(ValidationError, match="openai_reasoning_effort"):
+        Settings(**settings_kwargs())
+
+
 def test_audio_format_rejects_unsupported_container(
     settings_kwargs: Callable[..., dict[str, Any]],
 ) -> None:

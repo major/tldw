@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -210,6 +211,37 @@ async def test_openai_analyzer_returns_canned_takeaways() -> None:
     assert len(result.items) == 3
     assert result.items[0].title == "Takeaway 0"
     assert result.items[0].bullets[0].timestamp_seconds == 0
+
+
+@pytest.mark.parametrize(
+    "env_effort,expected_effort",
+    [(None, "high"), ("low", "low")],
+)
+async def test_openai_analyzer_sends_reasoning_effort_and_output_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    env_effort: str | None,
+    expected_effort: str,
+) -> None:
+    """Each takeaway request sends an explicit reasoning effort and a 32k output budget."""
+    # Arrange
+    if env_effort is not None:
+        monkeypatch.setenv("TLDW_OPENAI_REASONING_EFFORT", env_effort)
+    payload = _valid_payload()
+    seen: dict[str, dict[str, Any]] = {}
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Capture the model settings the Agent actually sends."""
+        seen["settings"] = dict(info.model_settings or {})
+        return ModelResponse(parts=[TextPart(content=json.dumps(payload))])
+
+    analyzer = OpenAIAnalyzer(
+        make_settings(openai_api_key="test-key"), model=_function_model(respond)
+    )
+    # Act
+    await analyzer.analyze("transcript", video_id="vid1", title="Title")
+    # Assert
+    assert seen["settings"].get("openai_reasoning_effort") == expected_effort
+    assert seen["settings"].get("max_tokens") == 32768
 
 
 async def test_openai_analyzer_retries_on_invalid_first_response(

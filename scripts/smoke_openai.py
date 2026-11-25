@@ -9,7 +9,7 @@ environments that do not have the project dependencies installed.
 Environment variables:
     TLDW_OPENAI_API_KEY   required API key
     TLDW_OPENAI_BASE_URL  base URL (default https://api.openai.com/v1)
-    TLDW_OPENAI_MODEL     model name (default gpt-6.1-sol)
+    TLDW_OPENAI_MODEL     model name (default gpt-6.2-sol)
 
 Exit codes:
     0  request succeeded (HTTP 2xx)
@@ -27,7 +27,7 @@ import urllib.error
 import urllib.request
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_MODEL = "gpt-6.2-sol"
 REQUEST_TIMEOUT_SECONDS = 30
 
 

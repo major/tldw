@@ -56,7 +56,7 @@ Environment variables (all read from the `TLDW_` namespace):
 | `TLDW_YTDLP_COOKIES_FILE` | No | unset | Optional path to a Netscape-format cookies file. Improves reliability when YouTube applies bot checks |
 | `TLDW_OPENAI_API_KEY` | Yes (for worker) | unset | API key required for audio transcription; the worker exits without it |
 | `TLDW_OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Base URL for the OpenAI-compatible endpoint |
-| `TLDW_OPENAI_MODEL` | No | `gpt-6.1-sol` | Model name to request from the endpoint |
+| `TLDW_OPENAI_MODEL` | No | `gpt-6.2-sol` | Model name to request from the endpoint |
 | `TLDW_LLM_TIMEOUT_SECONDS` | No | `180.0` | Per-call timeout for a takeaway request |
 | `TLDW_LLM_MAX_OUTPUT_TOKENS` | No | `2048` | Maximum tokens the takeaway model may generate |
 | `TLDW_LLM_MAX_INPUT_CHARS` | No | `300000` | Hard cap on transcript characters sent to the model. Longer transcripts are truncated with a warning |

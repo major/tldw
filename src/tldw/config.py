@@ -117,10 +117,10 @@ class Settings(BaseSettings):
 
     # LLM video takeaways (OpenAI). An unset API key turns the whole feature
     # off; there is no separate enable flag. The base URL defaults to the
-    # public OpenAI endpoint and the model defaults to ``gpt-6.1-sol``.
+    # public OpenAI endpoint and the model defaults to ``gpt-6.2-sol``.
     openai_api_key: str | None = None
     openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-6.1-sol"
+    openai_model: str = "gpt-6.2-sol"
     llm_timeout_seconds: float = 180.0
     llm_max_output_tokens: int = 2048
     # Hard cap on transcript characters sent to the LLM. Longer transcripts are

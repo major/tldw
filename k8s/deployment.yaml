@@ -72,7 +72,7 @@ spec:
             - name: TLDW_OPENAI_BASE_URL
               value: "https://api.openai.com/v1"
             - name: TLDW_OPENAI_MODEL
-              value: "gpt-6.1-sol"
+              value: "gpt-6.2-sol"
             - name: TLDW_POLL_BASE_SECONDS
               value: "600"
             - name: TLDW_POLL_CAP_SECONDS

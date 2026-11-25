@@ -251,6 +251,7 @@ class OpenAIAnalyzer:
                 retries=DEFAULT_OUTPUT_RETRIES,
                 model_settings=OpenAIResponsesModelSettings(
                     max_tokens=self._settings.llm_max_output_tokens,
+                    openai_reasoning_effort=self._settings.openai_reasoning_effort,
                 ),
             )
             result = await asyncio.wait_for(

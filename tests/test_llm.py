@@ -383,10 +383,11 @@ async def test_openai_analyzer_logs_truncated_response_before_failure(
             await analyzer.analyze("transcript", video_id="vid1", title="Title")
 
     # Assert: the warning survives the failed run and preserves provider details.
-    assert create.await_count == 3
+    # 🧭 pydantic-ai fails fast on a tool call cut off by the token limit instead of retrying with the same limit.
+    assert create.await_count == 1
     assert create.call_args.kwargs["max_output_tokens"] == 8192
     records = [r for r in caplog.records if getattr(r, "event", None) == "llm_response"]
-    assert [r.__dict__["attempt"] for r in records] == [1, 2, 3]
+    assert [r.__dict__["attempt"] for r in records] == [1]
     for record in records:
         assert record.levelno == logging.WARNING
         assert record.getMessage() == "LLM output token limit reached"
